@@ -30,9 +30,13 @@ func http_handler (w http.ResponseWriter, r *http.Request) {
 
 
 func main() {
-	mux := http.NewServeMux()
+	file_server := http.FileServer(http.Dir("./static"))
 
-	mux.HandleFunc("/", http_handler)
+	mux := http.NewServeMux()
+	handler := http.HandlerFunc(http_handler)
+	
+	mux.Handle("GET /", file_server)
+	mux.Handle("/", loggingMiddleware(handler))
 
 	fmt.Println("Server started on http://localhost:8080")
 	http.ListenAndServe(":8080", mux)
