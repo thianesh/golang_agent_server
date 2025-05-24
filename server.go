@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"thianesh/web_server/server_utils"
 )
 
 type responseRecorder struct {
@@ -30,6 +31,7 @@ func http_handler (w http.ResponseWriter, r *http.Request) {
 
 
 func main() {
+	mathutils.Add(1, 2)
 	file_server := http.FileServer(http.Dir("./static"))
 
 	mux := http.NewServeMux()
