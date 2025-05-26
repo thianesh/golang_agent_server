@@ -4,11 +4,21 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
+type UserId string
+
+type FullConnectionDetails struct {
+	Webrtc webrtc.PeerConnection
+	DataChannel webrtc.DataChannel
+}
 type UserConnection struct {
-	UserId string
+	UserId UserId
 	Username string
 	Email string
 	CompanyId string
 	Rooms []*Room
-	Connections []webrtc.PeerConnection
+	Connections []*FullConnectionDetails
+}
+
+type CompanyMembers struct {
+	UserConnections map[UserId][]*UserConnection
 }
