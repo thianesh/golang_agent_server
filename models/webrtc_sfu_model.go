@@ -7,8 +7,10 @@ import (
 type UserId string
 
 type FullConnectionDetails struct {
-	Webrtc webrtc.PeerConnection
-	DataChannel webrtc.DataChannel
+	Webrtc *webrtc.PeerConnection
+	DataChannel *webrtc.DataChannel
+	RtpSender *webrtc.RTPSender
+	SDP string
 }
 type UserConnection struct {
 	UserId UserId
