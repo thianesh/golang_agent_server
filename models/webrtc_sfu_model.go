@@ -9,8 +9,15 @@ type UserId string
 type FullConnectionDetails struct {
 	Webrtc *webrtc.PeerConnection
 	DataChannel *webrtc.DataChannel
-	RtpSender *webrtc.RTPSender
-	SDP string
+	VideoSender *webrtc.RTPSender
+	AudioSender *webrtc.RTPSender
+	AnswerSDP string
+	OfferSDP string
+	Died bool
+	Offline bool
+	OfflineSince int64 // Unix timestamp in seconds
+	UserDataChannels map[UserId]*webrtc.DataChannel
+	OnDataChannelBroadcaster func(*FullConnectionDetails)
 }
 type UserConnection struct {
 	UserId UserId
@@ -19,6 +26,7 @@ type UserConnection struct {
 	CompanyId string
 	Rooms []*Room
 	Connections []*FullConnectionDetails
+	LastActive int64 // Unix timestamp in seconds
 }
 
 type CompanyMembers struct {
