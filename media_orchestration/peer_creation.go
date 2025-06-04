@@ -1,7 +1,6 @@
 package mediaorchestration
 
 import (
-	"fmt"
 	"thianesh/web_server/models"
 	"time"
 
@@ -77,8 +76,10 @@ func PumpBlack(track *webrtc.TrackLocalStaticSample) {
 	}
 }
 
-
-func CreateAnswer(remoteOfferSDP string) (*models.FullConnectionDetails, error) {
+func CreateAnswer(
+	remoteOfferSDP string,
+	attach_ontrack_member_track_sync func(*models.FullConnectionDetails, *models.CompanySFU),
+	company_sfu *models.CompanySFU) (*models.FullConnectionDetails, error) {
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
 	})
@@ -103,7 +104,7 @@ func CreateAnswer(remoteOfferSDP string) (*models.FullConnectionDetails, error) 
 	/* -- audio track --------------------------------------------------- */
 	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{
-			MimeType:  webrtc.MimeTypeOpus,
+			MimeType: webrtc.MimeTypeOpus,
 		},
 		"audio", "pion-audio",
 	)
@@ -116,6 +117,16 @@ func CreateAnswer(remoteOfferSDP string) (*models.FullConnectionDetails, error) 
 	}
 	go drainRTCP(audioSender)
 
+	full_connection := &models.FullConnectionDetails{
+		Webrtc:           pc,
+		VideoSender:      videoSender,
+		AudioSender:      audioSender,
+		VideoSenderTrack: videoTrack,
+		AudioSenderTrack: audioTrack,
+		OfferSDP:         remoteOfferSDP,
+	}
+
+	attach_ontrack_member_track_sync(full_connection, company_sfu)
 	/* -- handle remote offer ------------------------------------------ */
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -129,44 +140,9 @@ func CreateAnswer(remoteOfferSDP string) (*models.FullConnectionDetails, error) 
 		panic(err)
 	}
 
-	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) { //nolint: revive
-		fmt.Printf("Track has started, of type %d: %s \n", track.PayloadType(), track.Codec().MimeType)
-		if track.PayloadType() != 96 {
-			for {
-				rtp, _, readErr := track.ReadRTP()
-				if readErr != nil {
-					fmt.Println("Unable to read RTP")
-					break
-				}
-				
-				if writeErr := audioTrack.WriteRTP(rtp); writeErr != nil {
-					fmt.Println("Unable to Write RTP")
-					break
-				}
-			}
-		} else {
-			for {
-				rtp, _, readErr := track.ReadRTP()
-				if readErr != nil {
-					fmt.Println("Unable to read RTP")
-					break
-				}
-				
-				if writeErr := videoTrack.WriteRTP(rtp); writeErr != nil {
-					fmt.Println("Unable to Write RTP")
-					break
-				}
-			}
-		}
-	})
-
 	<-webrtc.GatheringCompletePromise(pc)
 
-	return &models.FullConnectionDetails{
-		Webrtc:      pc,
-		VideoSender: videoSender,
-		AudioSender: audioSender,
-		AnswerSDP:   pc.LocalDescription().SDP,
-		OfferSDP:    remoteOfferSDP,
-	}, nil
+	full_connection.AnswerSDP = pc.LocalDescription().SDP
+
+	return full_connection, nil
 }

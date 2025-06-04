@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-type RoomId string
-
 type CompanySFU struct {
 	Users              map[UserId]*FullConnectionDetails
 	Rooms              map[RoomId]*Room
@@ -15,6 +13,7 @@ type CompanySFU struct {
 	MaxUserConnections int
 	MaxRooms           int
 	MaxUsers           int
+	CompanyID          string
 }
 
 func NewCompanySFU() *CompanySFU {

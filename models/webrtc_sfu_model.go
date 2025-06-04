@@ -5,30 +5,41 @@ import (
 )
 
 type UserId string
+type RoomId string
+
+type MemberOutputTrack struct {
+	AudioTrack *webrtc.RTPSender
+	VideoTrack *webrtc.RTPSender
+	VideoSenderTrack *webrtc.TrackLocalStaticRTP
+	AudioSenderTrack *webrtc.TrackLocalStaticRTP
+	DataTrack *webrtc.DataChannel
+	Accessible bool
+	Status string
+}
 
 type FullConnectionDetails struct {
 	Webrtc *webrtc.PeerConnection
 	DataChannel *webrtc.DataChannel
 	VideoSender *webrtc.RTPSender
 	AudioSender *webrtc.RTPSender
+	VideoSenderTrack *webrtc.TrackLocalStaticRTP
+	AudioSenderTrack *webrtc.TrackLocalStaticRTP
 	AnswerSDP string
 	OfferSDP string
 	Died bool
 	Offline bool
 	OfflineSince int64 // Unix timestamp in seconds
-	UserDataChannels map[UserId]*webrtc.DataChannel
+	MemberTracks map[string]*MemberOutputTrack
 	OnDataChannelBroadcaster func(*FullConnectionDetails)
-}
-type UserConnection struct {
 	UserId UserId
 	Username string
 	Email string
 	CompanyId string
 	Rooms []*Room
-	Connections []*FullConnectionDetails
-	LastActive int64 // Unix timestamp in seconds
+	LastActive int64
 }
 
-type CompanyMembers struct {
-	UserConnections map[UserId][]*UserConnection
+type RoutingCondition struct {
+	UserIds []UserId
+	RoomIds []RoomId
 }

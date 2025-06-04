@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"slices"
 	mediaorchestration "thianesh/web_server/media_orchestration"
 	"thianesh/web_server/models"
 	"time"
@@ -39,8 +38,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-var UserConnections = make(map[string]*models.UserConnection)
-var CompanyAndMembers = make(map[string]*models.CompanyMembers)
+var UserConnections = make(map[string]*models.FullConnectionDetails)
 var CompanySFUs = make(map[string]*models.CompanySFU)
 
 type SDPRequest struct {
@@ -122,82 +120,24 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// accepting the offered SDP
-	peerConnection, err := mediaorchestration.CreateAnswer(sdp)
-	if err != nil {
-		http.Error(w, "Failed to create answer", http.StatusInternalServerError)
-		log.Println("Create answer error:", err)
-		return
-	}
+	if _, ok := UserConnections[parsed_user_data.User.ID]; ok {
+		logger.Debug(fmt.Sprintf("Existing connection found for %s, connection state: %t", UserConnections[parsed_user_data.User.ID].Email, UserConnections[parsed_user_data.User.ID].Died))
+		if !UserConnections[parsed_user_data.User.ID].Died {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
 
-	peerConnection.OfferSDP = payload.SDP
-	peerConnection.AnswerSDP = peerConnection.Webrtc.LocalDescription().SDP
-	peerConnection.Died = false
-	peerConnection.Offline = false
-	peerConnection.OfflineSince = 0
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "User connection already exists. Please exit that connection to connect here.",
+			})
 
-	if _, ok := UserConnections[parsed_user_data.User.ID]; !ok {
-		log.Println("User not found, creating new connection")
-		UserConnections[parsed_user_data.User.ID] = &models.UserConnection{
-			UserId:      models.UserId(parsed_user_data.User.ID),
-			Username:    parsed_user_data.User.FullName,
-			Email:       parsed_user_data.User.Email,
-			CompanyId:   parsed_user_data.CompanyID,
-			Rooms:       []*models.Room{}, // Initialize with empty rooms
-			Connections: []*models.FullConnectionDetails{},
+			return
 		}
-	}
-
-	if _, ok := CompanyAndMembers[parsed_user_data.CompanyID]; !ok {
-		log.Println("Company not found, creating new company members")
-		CompanyAndMembers[parsed_user_data.CompanyID] = &models.CompanyMembers{
-			UserConnections: make(map[models.UserId][]*models.UserConnection),
-		}
-	}
-
-	if len(UserConnections[parsed_user_data.User.ID].Connections) > 0 {
-		logger.Debug(fmt.Sprintf("Existing connection found for %s, connection state: %t", UserConnections[parsed_user_data.User.ID].Email, UserConnections[parsed_user_data.User.ID].Connections[0].Died))
-		if UserConnections[parsed_user_data.User.ID].Connections[0].Died {
-			logger.Debug("Before removing exiting connections", "connection details", UserConnections[parsed_user_data.User.ID].Connections)
-			UserConnections[parsed_user_data.User.ID].Connections = slices.Delete(UserConnections[parsed_user_data.User.ID].Connections, 0, 1)
-			logger.Debug("After removing exiting connections", "connection details", UserConnections[parsed_user_data.User.ID].Connections)
-		}
-	}
-	// Don't want to add more than one user connections for now
-	if len(UserConnections[parsed_user_data.User.ID].Connections) > 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "User connection already exists. Please exit that connection to connect here.",
-		})
-
-		return
-	}
-
-	// Add the peer connection to the user's connections
-	UserConnections[parsed_user_data.User.ID].Connections = append(
-		UserConnections[parsed_user_data.User.ID].Connections,
-		peerConnection,
-	)
-	// Add the user connection to the company members
-	CompanyAndMembers[parsed_user_data.CompanyID].UserConnections[models.UserId(parsed_user_data.User.ID)] =
-		append(CompanyAndMembers[parsed_user_data.CompanyID].UserConnections[models.UserId(parsed_user_data.User.ID)],
-			UserConnections[parsed_user_data.User.ID],
-		)
-
-	// start all webrtc processes
-	go mediaorchestration.SingleOrchestrator(peerConnection)
-
-	//setup renegotiation
-	peerConnection.OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
-		logger.Debug("Data Channel added! adding negotiator.")
-		mediaorchestration.Initialize_renegotiation(fcd)
 	}
 
 	// Add company SFU process to CompanuSFUs
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID]; !ok {
 		CompanySFUs[parsed_user_data.CompanyID] = models.NewCompanySFU()
+		CompanySFUs[parsed_user_data.CompanyID].CompanyID = parsed_user_data.CompanyID
 		// Start SFU processed
 		// Start Boradcasting online status
 		go CompanySFUs[parsed_user_data.CompanyID].StartOnlineStatusBroadcaster()
@@ -205,12 +145,43 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		go CompanySFUs[parsed_user_data.CompanyID].StartHeartBeat()
 	}
 
+	// accepting the offered SDP
+	peer_connection, err := mediaorchestration.CreateAnswer(sdp, models.Sync_track, CompanySFUs[parsed_user_data.CompanyID])
+
+	if err != nil {
+		http.Error(w, "Failed to create answer", http.StatusInternalServerError)
+		log.Println("Create answer error:", err)
+		return
+	}
+
+	UserConnections[parsed_user_data.User.ID] = peer_connection
+
+	UserConnections[parsed_user_data.User.ID].OfferSDP = payload.SDP
+	UserConnections[parsed_user_data.User.ID].AnswerSDP = UserConnections[parsed_user_data.User.ID].Webrtc.LocalDescription().SDP
+	UserConnections[parsed_user_data.User.ID].Died = false
+	UserConnections[parsed_user_data.User.ID].Offline = false
+	UserConnections[parsed_user_data.User.ID].OfflineSince = 0
+
+	UserConnections[parsed_user_data.User.ID].UserId = models.UserId(parsed_user_data.User.ID)
+	UserConnections[parsed_user_data.User.ID].Username = parsed_user_data.User.FullName
+	UserConnections[parsed_user_data.User.ID].Email = parsed_user_data.User.Email
+	UserConnections[parsed_user_data.User.ID].CompanyId = parsed_user_data.CompanyID
+	UserConnections[parsed_user_data.User.ID].Rooms = []*models.Room{}
+	// start all webrtc processes
+	go mediaorchestration.SingleOrchestrator(UserConnections[parsed_user_data.User.ID])
+
+	//setup renegotiation
+	UserConnections[parsed_user_data.User.ID].OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
+		logger.Debug("Data Channel added! adding negotiator.")
+		mediaorchestration.Initialize_renegotiation(fcd)
+	}
+
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; !ok {
-		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = UserConnections[parsed_user_data.User.ID].Connections[0]
+		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = UserConnections[parsed_user_data.User.ID]
 	}
 
 	res_payload := map[string]interface{}{
-		"SDP":    EncodeToBase64(peerConnection.AnswerSDP),
+		"SDP":    EncodeToBase64(UserConnections[parsed_user_data.User.ID].AnswerSDP),
 		"status": "success",
 	}
 
@@ -219,7 +190,7 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// testing re-negotiation
-	go add_track(peerConnection)
+	// go add_track(UserConnections[parsed_user_data.User.ID])
 
 	logger.Debug("All-Set nothing pending.")
 }
