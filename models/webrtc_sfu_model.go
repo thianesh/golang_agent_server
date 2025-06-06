@@ -37,6 +37,8 @@ type FullConnectionDetails struct {
 	CompanyId string
 	Rooms []*Room
 	LastActive int64
+	AudioReceiver *webrtc.TrackRemote
+	VideoReceiver *webrtc.TrackRemote
 }
 
 type RoutingCondition struct {

@@ -137,7 +137,6 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	// Add company SFU process to CompanuSFUs
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID]; !ok {
 		CompanySFUs[parsed_user_data.CompanyID] = models.NewCompanySFU()
-		CompanySFUs[parsed_user_data.CompanyID].CompanyID = parsed_user_data.CompanyID
 		// Start SFU processed
 		// Start Boradcasting online status
 		go CompanySFUs[parsed_user_data.CompanyID].StartOnlineStatusBroadcaster()
@@ -145,8 +144,14 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		go CompanySFUs[parsed_user_data.CompanyID].StartHeartBeat()
 	}
 
+	CompanySFUs[parsed_user_data.CompanyID].CompanyID = parsed_user_data.CompanyID
+
 	// accepting the offered SDP
-	peer_connection, err := mediaorchestration.CreateAnswer(sdp, models.Sync_track, CompanySFUs[parsed_user_data.CompanyID])
+	peer_connection, err := mediaorchestration.CreateAnswer(
+		sdp,
+		&parsed_user_data,
+		models.Sync_track,
+		CompanySFUs[parsed_user_data.CompanyID])
 
 	if err != nil {
 		http.Error(w, "Failed to create answer", http.StatusInternalServerError)
@@ -162,7 +167,6 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	UserConnections[parsed_user_data.User.ID].Offline = false
 	UserConnections[parsed_user_data.User.ID].OfflineSince = 0
 
-	UserConnections[parsed_user_data.User.ID].UserId = models.UserId(parsed_user_data.User.ID)
 	UserConnections[parsed_user_data.User.ID].Username = parsed_user_data.User.FullName
 	UserConnections[parsed_user_data.User.ID].Email = parsed_user_data.User.Email
 	UserConnections[parsed_user_data.User.ID].CompanyId = parsed_user_data.CompanyID

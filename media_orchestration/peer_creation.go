@@ -78,6 +78,7 @@ func PumpBlack(track *webrtc.TrackLocalStaticSample) {
 
 func CreateAnswer(
 	remoteOfferSDP string,
+	parsed_user_data *models.AuthResponse,
 	attach_ontrack_member_track_sync func(*models.FullConnectionDetails, *models.CompanySFU),
 	company_sfu *models.CompanySFU) (*models.FullConnectionDetails, error) {
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{
@@ -124,6 +125,8 @@ func CreateAnswer(
 		VideoSenderTrack: videoTrack,
 		AudioSenderTrack: audioTrack,
 		OfferSDP:         remoteOfferSDP,
+		UserId:           models.UserId(parsed_user_data.User.ID),
+		MemberTracks:     map[string]*models.MemberOutputTrack{},
 	}
 
 	attach_ontrack_member_track_sync(full_connection, company_sfu)
