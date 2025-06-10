@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
 
-var audio_track_lock sync.Mutex
-var video_track_lock sync.Mutex
-
 func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU) {
-	peer_connection.Webrtc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) { //nolint: revive
-		fmt.Printf("Track has started, of type %d: %s \n", track.PayloadType(), track.Codec().MimeType)
+	peer_connection.Webrtc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		// fmt.Printf("Track has started, of type %d: %s \n", track.PayloadType(), track.Codec().MimeType)
 
 		mime := track.Codec().MimeType
 
@@ -24,73 +22,11 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 		if strings.HasPrefix(mime, "audio/") {
 			peer_connection.AudioReceiver = track
 
-			// Since we received an event of rtp channel
-			// no all memeber should be able to receive the strem if available
-			audio_track_lock.Lock()
-			var wg sync.WaitGroup
-
-			for _, user := range company_sfu.Users {
-
-				if user.UserId == peer_connection.UserId {
-					continue
-				}
-
-				fmt.Println(company_sfu)
-
-				audioTrack, err := webrtc.NewTrackLocalStaticRTP(
-					webrtc.RTPCodecCapability{
-						MimeType: track.Codec().MimeType,
-					},
-					string(peer_connection.UserId), string(user.UserId)+"_"+string(peer_connection.UserId),
-				)
-				if err != nil {
-					continue
-				}
-				audioSender, err := user.Webrtc.AddTrack(audioTrack)
-
-				go func() {
-					rtcpBuf := make([]byte, 1500)
-					for {
-						if _, _, rtcpErr := audioSender.Read(rtcpBuf); rtcpErr != nil {
-							return
-						}
-					}
-				}()
-
-				if err != nil {
-					continue
-				}
-
-				if _, ok := user.MemberTracks[string(peer_connection.UserId)]; !ok {
-					member_output_track := &MemberOutputTrack{
-						AudioTrack:       audioSender,
-						AudioSenderTrack: audioTrack,
-						DataTrack:        peer_connection.DataChannel,
-						Accessible:       true,
-						Status:           "online",
-					}
-					user.MemberTracks[string(peer_connection.UserId)] = member_output_track
-				} else {
-					user.MemberTracks[string(peer_connection.UserId)].AudioTrack = audioSender
-					user.MemberTracks[string(peer_connection.UserId)].AudioSenderTrack = audioTrack
-				}
-
-				wg.Add(1)
-				go Renegotiate(peer_connection, &wg)
-			}
-
-			wg.Wait()
-			audio_track_lock.Unlock()
-
 			for {
 				rtp, _, readErr := track.ReadRTP()
+
 				if readErr != nil {
 					fmt.Println("Unable to read RTP")
-					break
-				}
-
-				if writeErr := peer_connection.AudioSenderTrack.WriteRTP(rtp); writeErr != nil {
-					fmt.Println("Unable to Write RTP")
 					break
 				}
 
@@ -100,14 +36,34 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						continue
 					}
 
-					if user.MemberTracks[string(peer_connection.UserId)] == nil {
-						fmt.Println("AudioTrack is nill for ", peer_connection.UserId)
-						go sysc_user_tracks_and_renegotiate(company_sfu)
+					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
+					if user.Webrtc.SignalingState() != webrtc.SignalingStateStable {
+						fmt.Println("Signaling state is not stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState())
 						continue
 					}
+
+					if peer_connection.Webrtc.SignalingState() != webrtc.SignalingStateStable {
+						fmt.Println("Signaling state is not stable for peer connection", peer_connection.Email, peer_connection.UserId, "state:", peer_connection.Webrtc.SignalingState())
+						continue
+					}
+
+					// fmt.Println("Signaling state is stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState(), "and peer connection", peer_connection.Email, peer_connection.UserId, "state:", peer_connection.Webrtc.SignalingState())
+
+					if user.MemberTracks[string(peer_connection.UserId)] == nil {
+						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId)
+						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						continue
+					}
+
+					if user.MemberTracks[string(peer_connection.UserId)].AudioTrack == nil {
+						fmt.Println("Audio track is nill for ", string(peer_connection.UserId))
+						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						continue
+					}
+
 					if writeErr := user.MemberTracks[string(peer_connection.UserId)].AudioSenderTrack.WriteRTP(rtp); writeErr != nil {
 						fmt.Println("Unable to Write RTP")
-						break
+						continue
 					}
 				}
 			}
@@ -115,73 +71,14 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 		} else if strings.HasPrefix(mime, "video/") {
 			peer_connection.VideoReceiver = track
 
-			// Since we received an event of rtp channel
-			// no all memeber should be able to receive the strem if available
-			video_track_lock.Lock()
-			var wg sync.WaitGroup
-
-			for _, user := range company_sfu.Users {
-
-				if user.UserId == peer_connection.UserId {
-					continue
-				}
-
-				fmt.Println(company_sfu)
-
-				VideoTrack, err := webrtc.NewTrackLocalStaticRTP(
-					webrtc.RTPCodecCapability{
-						MimeType: track.Codec().MimeType,
-					},
-					string(peer_connection.UserId), string(user.UserId)+"_"+string(peer_connection.UserId),
-				)
-				if err != nil {
-					continue
-				}
-				VideoSender, err := user.Webrtc.AddTrack(VideoTrack)
-
-				go func() {
-					rtcpBuf := make([]byte, 1500)
-					for {
-						if _, _, rtcpErr := VideoSender.Read(rtcpBuf); rtcpErr != nil {
-							return
-						}
-					}
-				}()
-
-				if err != nil {
-					continue
-				}
-
-				if _, ok := user.MemberTracks[string(peer_connection.UserId)]; !ok {
-					member_output_track := &MemberOutputTrack{
-						VideoTrack:       VideoSender,
-						VideoSenderTrack: VideoTrack,
-						DataTrack:        peer_connection.DataChannel,
-						Accessible:       true,
-						Status:           "online",
-					}
-					user.MemberTracks[string(peer_connection.UserId)] = member_output_track
-				} else {
-					user.MemberTracks[string(peer_connection.UserId)].VideoTrack = VideoSender
-					user.MemberTracks[string(peer_connection.UserId)].VideoSenderTrack = VideoTrack
-				}
-
-				wg.Add(1)
-				go Renegotiate(peer_connection, &wg)
-			}
-
-			wg.Wait()
-			video_track_lock.Unlock()
+			// Sending PLI for new connections to receive the video stream
+			SendPLI(track, peer_connection.Webrtc, 10*time.Second)
 
 			for {
 				rtp, _, readErr := track.ReadRTP()
+
 				if readErr != nil {
 					fmt.Println("Unable to read RTP")
-					break
-				}
-
-				if writeErr := peer_connection.VideoSenderTrack.WriteRTP(rtp); writeErr != nil {
-					fmt.Println("Unable to Write RTP")
 					break
 				}
 
@@ -191,14 +88,34 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						continue
 					}
 
-					if user.MemberTracks[string(peer_connection.UserId)] == nil {
-						fmt.Println("Video is nill for ", peer_connection.UserId)
-						go sysc_user_tracks_and_renegotiate(company_sfu)
+					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
+					if user.Webrtc.SignalingState() != webrtc.SignalingStateStable {
+						fmt.Println("Signaling state is not stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState())
 						continue
 					}
+
+					if peer_connection.Webrtc.SignalingState() != webrtc.SignalingStateStable {
+						fmt.Println("Signaling state is not stable for peer connection", peer_connection.Email, peer_connection.UserId, "state:", peer_connection.Webrtc.SignalingState())
+						continue
+					}
+
+					// fmt.Println("Signaling state is stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState(), "and peer connection", peer_connection.Email, peer_connection.UserId, "state:", peer_connection.Webrtc.SignalingState())
+
+					if user.MemberTracks[string(peer_connection.UserId)] == nil {
+						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId, "for user", user.Email, user.UserId)
+						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						continue
+					}
+
+					if user.MemberTracks[string(peer_connection.UserId)].VideoTrack == nil {
+						fmt.Println("Video track is nill for ", string(peer_connection.UserId), "for user", user.Email, user.UserId)
+						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						continue
+					}
+
 					if writeErr := user.MemberTracks[string(peer_connection.UserId)].VideoSenderTrack.WriteRTP(rtp); writeErr != nil {
 						fmt.Println("Unable to Write RTP")
-						break
+						continue
 					}
 				}
 
@@ -216,7 +133,7 @@ func Renegotiate(single_connection *FullConnectionDetails, wg *sync.WaitGroup) {
 		defer mu.Unlock()
 		defer wg.Done()
 
-		fmt.Println("Re-Negotiation initiated")
+		fmt.Println("Re-Negotiation initiated with wait group")
 		offer, _ := single_connection.Webrtc.CreateOffer(nil) // plain renegotiation; ICE stays same
 		_ = single_connection.Webrtc.SetLocalDescription(offer)
 		<-webrtc.GatheringCompletePromise(single_connection.Webrtc) // wait for all ICE candidates
@@ -230,23 +147,55 @@ func Renegotiate(single_connection *FullConnectionDetails, wg *sync.WaitGroup) {
 		if single_connection.DataChannel != nil {
 			single_connection.DataChannel.Send(b)
 		} else {
-			fmt.Println("No data channel to re-negotiate!")
+			fmt.Println("No data channel to re-negotiate! user_id: ", single_connection.UserId)
 		}
 	}
 	renegotiate()
 }
 
-var full_sync_lock sync.Mutex
+func Renegotiate_no_waitgroup(single_connection *FullConnectionDetails) {
+
+	renegotiate := func() {
+		single_connection.RenegotiateMutex.Lock()
+		defer single_connection.RenegotiateMutex.Unlock()
+
+		fmt.Println("Re-Negotiation initiated without wait group line 264")
+		offer, _ := single_connection.Webrtc.CreateOffer(nil) // plain renegotiation; ICE stays same
+		_ = single_connection.Webrtc.SetLocalDescription(offer)
+		<-webrtc.GatheringCompletePromise(single_connection.Webrtc) // wait for all ICE candidates
+
+		payload := map[string]interface{}{
+			"Type": "offer",
+			"SDP":  single_connection.Webrtc.LocalDescription().SDP,
+		}
+
+		b, _ := json.Marshal(payload)
+		if single_connection.DataChannel != nil {
+			fmt.Println("Negotiation Strated successfully, sending New offer in data channel for user:", single_connection.UserId)
+			single_connection.DataChannel.Send(b)
+		} else {
+			fmt.Println("No data channel to re-negotiate! user:", single_connection.UserId)
+		}
+	}
+	renegotiate()
+}
 
 func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 
-	full_sync_lock.Lock()
-	defer full_sync_lock.Unlock()
+	fmt.Println("Syncing user tracks and renegotiating...")
+
+	users_to_renegotiate := make([]*FullConnectionDetails, 0)
 
 	for _, user := range company_sfu.Users {
+
+		if user.Died {
+			continue
+		}
+
 		if user.MemberTracks == nil {
 			user.MemberTracks = map[string]*MemberOutputTrack{}
 		}
+
 		// Each user should have all the memebers connection except his own
 		for _, users_connction_check := range company_sfu.Users {
 
@@ -254,86 +203,161 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 				continue
 			}
 
-			// now lets check
-			if _, ok := user.MemberTracks[string(users_connction_check.UserId)]; !ok {
+			track_exists := false
 
-				if _, ok := company_sfu.Users[users_connction_check.UserId]; !ok {
-					continue
-				}
+			audio_track := company_sfu.Users[users_connction_check.UserId].AudioReceiver
+			video_track := company_sfu.Users[users_connction_check.UserId].VideoReceiver
 
-				//creating audio track
-				if company_sfu.Users[users_connction_check.UserId].AudioReceiver == nil {
-					continue
-				}
+			if audio_track != nil {
 
-				track := company_sfu.Users[users_connction_check.UserId].AudioReceiver
-
-				audioTrack, err := webrtc.NewTrackLocalStaticRTP(
-					webrtc.RTPCodecCapability{
-						MimeType: track.Codec().MimeType,
-					},
-					string(users_connction_check.UserId), string(user.UserId)+"_"+string(users_connction_check.UserId)+"_audio",
-				)
-				if err != nil {
-					continue
-				}
-				audioSender, err := user.Webrtc.AddTrack(audioTrack)
-
-				go func() {
-					rtcpBuf := make([]byte, 1500)
-					for {
-						if _, _, rtcpErr := audioSender.Read(rtcpBuf); rtcpErr != nil {
-							return
+				// If audio track is not present for the user, we will add it
+				if _, ok := user.MemberTracks[string(users_connction_check.UserId)]; ok {
+					if user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack == nil {
+						if _, ok := AddAudioTrack(user, company_sfu, users_connction_check); ok {
+							fmt.Println("Added audio track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
+							track_exists = true
 						}
 					}
-				}()
-
-				if err != nil {
-					continue
-				}
-				member_output_track := &MemberOutputTrack{
-					AudioTrack:       audioSender,
-					AudioSenderTrack: audioTrack,
-					DataTrack:        users_connction_check.DataChannel,
-					Accessible:       true,
-					Status:           "online",
+				} else {
+					// If the member track is not present, we will add it
+					if _, ok := AddAudioTrack(user, company_sfu, users_connction_check); ok {
+						fmt.Println("Added audio track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
+						track_exists = true
+					}
 				}
 
-				user.MemberTracks[string(users_connction_check.UserId)] = member_output_track
+			}
 
-				// now setting video track
-				viceo_track := company_sfu.Users[users_connction_check.UserId].VideoReceiver
+			if video_track != nil {
 
-				VideoTrack, err := webrtc.NewTrackLocalStaticRTP(
-					webrtc.RTPCodecCapability{
-						MimeType: viceo_track.Codec().MimeType,
-					},
-					string(users_connction_check.UserId), string(user.UserId)+"_"+string(users_connction_check.UserId)+"_video",
-				)
-				if err != nil {
-					continue
-				}
-				VideoSender, err := user.Webrtc.AddTrack(VideoTrack)
-
-				go func() {
-					rtcpBuf := make([]byte, 1500)
-					for {
-						if _, _, rtcpErr := VideoSender.Read(rtcpBuf); rtcpErr != nil {
-							return
+				// If audio track is not present for the user, we will add it
+				if _, ok := user.MemberTracks[string(users_connction_check.UserId)]; ok {
+					if user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack == nil {
+						if _, ok := AddVideoTrack(user, company_sfu, users_connction_check); ok {
+							fmt.Println("Added video track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
+							track_exists = true
 						}
 					}
-				}()
-
-				if err != nil {
-					continue
+				} else {
+					// If the member track is not present, we will add it
+					if _, ok := AddVideoTrack(user, company_sfu, users_connction_check); ok {
+						fmt.Println("Added video track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
+						track_exists = true
+					}
 				}
 
-				user.MemberTracks[string(users_connction_check.UserId)].VideoTrack = VideoSender
-				user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack = VideoTrack
-
+			}
+			if track_exists {
+				users_to_renegotiate = append(users_to_renegotiate, user)
 			}
 
 		}
 	}
+}
 
+func AddAudioTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_connction_check *FullConnectionDetails) (error, bool) {
+
+	if _, ok := company_sfu.Users[users_connction_check.UserId]; !ok {
+		return fmt.Errorf("user not found in company sfu"), false
+	}
+
+	track := company_sfu.Users[users_connction_check.UserId].AudioReceiver
+
+	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{
+			MimeType: track.Codec().MimeType,
+		},
+		string(users_connction_check.UserId)+"_audio", string(user.UserId)+"_"+string(users_connction_check.UserId)+"_audio",
+	)
+	if err != nil {
+		return err, false
+	}
+	audioSender, err := user.Webrtc.AddTrack(audioTrack)
+
+	go func() {
+		rtcpBuf := make([]byte, 1500)
+		for {
+			if _, _, rtcpErr := audioSender.Read(rtcpBuf); rtcpErr != nil {
+				return
+			}
+		}
+	}()
+
+	if err != nil {
+		return err, false
+	}
+
+	if user.MemberTracks[string(users_connction_check.UserId)] == nil {
+		user.MemberTracks[string(users_connction_check.UserId)] = &MemberOutputTrack{
+			Accessible: true,
+			Status:     "online",
+		}
+	}
+
+	user.MemberTracks[string(users_connction_check.UserId)].AudioTrack = audioSender
+	user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack = audioTrack
+	user.MemberTracks[string(users_connction_check.UserId)].DataTrack = users_connction_check.DataChannel
+	user.MemberTracks[string(users_connction_check.UserId)].Status = "online"
+	user.MemberTracks[string(users_connction_check.UserId)].Accessible = true
+	return nil, true
+}
+
+func AddVideoTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_connction_check *FullConnectionDetails) (error, bool) {
+
+	if _, ok := company_sfu.Users[users_connction_check.UserId]; !ok {
+		return fmt.Errorf("user not found in company sfu"), false
+	}
+
+	track := company_sfu.Users[users_connction_check.UserId].VideoReceiver
+
+	VideoTrack, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{
+			MimeType: track.Codec().MimeType,
+		},
+		string(users_connction_check.UserId)+"_video", string(user.UserId)+"_"+string(users_connction_check.UserId)+"_video",
+	)
+	if err != nil {
+		return err, false
+	}
+	VideoSender, err := user.Webrtc.AddTrack(VideoTrack)
+
+	go func() {
+		rtcpBuf := make([]byte, 1500)
+		for {
+			if _, _, rtcpErr := VideoSender.Read(rtcpBuf); rtcpErr != nil {
+				return
+			}
+		}
+	}()
+
+	if err != nil {
+		return err, false
+	}
+
+	if user.MemberTracks[string(users_connction_check.UserId)] == nil {
+		user.MemberTracks[string(users_connction_check.UserId)] = &MemberOutputTrack{
+			Accessible: true,
+			Status:     "online",
+		}
+	}
+
+	user.MemberTracks[string(users_connction_check.UserId)].VideoTrack = VideoSender
+	user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack = VideoTrack
+	user.MemberTracks[string(users_connction_check.UserId)].DataTrack = users_connction_check.DataChannel
+	user.MemberTracks[string(users_connction_check.UserId)].Status = "online"
+	user.MemberTracks[string(users_connction_check.UserId)].Accessible = true
+	return nil, true
+}
+
+func UniqueUsers(input []*FullConnectionDetails) []*FullConnectionDetails {
+	seen := make(map[*FullConnectionDetails]bool)
+	unique := make([]*FullConnectionDetails, 0)
+
+	for _, u := range input {
+		if !seen[u] {
+			seen[u] = true
+			unique = append(unique, u)
+		}
+	}
+	return unique
 }

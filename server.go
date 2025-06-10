@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	mediaorchestration "thianesh/web_server/media_orchestration"
 	"thianesh/web_server/models"
 	"time"
@@ -172,11 +173,12 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	UserConnections[parsed_user_data.User.ID].CompanyId = parsed_user_data.CompanyID
 	UserConnections[parsed_user_data.User.ID].Rooms = []*models.Room{}
 	// start all webrtc processes
-	go mediaorchestration.SingleOrchestrator(UserConnections[parsed_user_data.User.ID])
+	go mediaorchestration.SingleOrchestrator(UserConnections[parsed_user_data.User.ID], CompanySFUs[parsed_user_data.CompanyID])
 
 	//setup renegotiation
 	UserConnections[parsed_user_data.User.ID].OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
 		logger.Debug("Data Channel added! adding negotiator.")
+		fcd.RenegotiateMutex = sync.Mutex{}
 		mediaorchestration.Initialize_renegotiation(fcd)
 	}
 

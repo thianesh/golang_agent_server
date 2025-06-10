@@ -14,6 +14,7 @@ type CompanySFU struct {
 	MaxRooms           int
 	MaxUsers           int
 	CompanyID          string
+	RtpSyncNeeded      bool
 }
 
 func NewCompanySFU() *CompanySFU {
@@ -24,6 +25,7 @@ func NewCompanySFU() *CompanySFU {
 		MaxUserConnections: 100,
 		MaxRooms:           100,
 		MaxUsers:           100,
+		RtpSyncNeeded:      false,
 	}
 }
 
@@ -53,6 +55,7 @@ func (sfu *CompanySFU) Heartbeat() {
 
 				continue
 			}
+			sysc_user_tracks_and_renegotiate(sfu)
 		} else {
 			user.Died = true
 		}
