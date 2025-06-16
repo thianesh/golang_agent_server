@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,8 @@ type CompanySFU struct {
 	MaxUsers           int
 	CompanyID          string
 	RtpSyncNeeded      bool
+	Renegotiating      bool
+	CompanySFUsMutex   sync.RWMutex
 }
 
 func NewCompanySFU() *CompanySFU {
@@ -55,7 +58,7 @@ func (sfu *CompanySFU) Heartbeat() {
 
 				continue
 			}
-			sysc_user_tracks_and_renegotiate(sfu)
+			// sysc_user_tracks_and_renegotiate(sfu)
 		} else {
 			user.Died = true
 		}
@@ -73,32 +76,74 @@ func (sfu *CompanySFU) Heartbeat() {
 
 func (sfu *CompanySFU) SendOnlineStatus() {
 	userCount := len(sfu.Users)
-	UserActiveList := make([]UserId, userCount)
-	i := 0
-	for user_id := range sfu.Users {
-		UserActiveList[i] = user_id
-		i++
-	}
-	payload := map[string]interface{}{
-		"event_source": "sfu",
-		"event":        "online_status",
-		"data": map[string]interface{}{
-			"active_users": UserActiveList,
-			"total_users":  userCount,
-		},
-	}
+	// UserActiveList := []UserId{}
 
-	jsonBytes, err := json.Marshal(payload)
-	if err != nil {
-		panic(err)
-	}
+	type media_details map[string]string
 
-	for _, user := range sfu.Users {
-		if user.DataChannel != nil {
-			if err := user.DataChannel.Send(jsonBytes); err != nil {
-				user.Offline = true
-				user.OfflineSince = time.Now().Unix()
+	// i := 0
+	for _, user_full := range sfu.Users {
+		// UserActiveList = append(UserActiveList, UserId(user_id))
+		// i++
+
+		if user_full.Died {
+			continue
+		}
+
+		for _, user := range sfu.Users {
+
+			members_media_ids := make(map[UserId]media_details, userCount)
+
+			for member_id, member_track := range user.MemberTracks {
+				audio_track_id := ""
+				video_track_id := ""
+				audio_stream_id := ""
+				video_stream_id := ""
+
+				if member_track.AudioTrack != nil {
+					audio_track_id = member_track.AudioSenderTrack.ID()
+					audio_stream_id = member_track.AudioSenderTrack.StreamID()
+				}
+				if member_track.VideoTrack != nil {
+					video_track_id = member_track.VideoSenderTrack.ID()
+					video_stream_id = member_track.VideoSenderTrack.StreamID()
+				}
+				members_media_ids[UserId(member_id)] = media_details{
+					"audio":        audio_track_id,
+					"video":        video_track_id,
+					"audio_stream": audio_stream_id,
+					"video_stream": video_stream_id,
+				}
 			}
+
+			members_media_ids[user.UserId] = media_details{
+				"audio":        "",
+				"video":        "",
+				"audio_stream": "",
+				"video_stream": "",
+			}
+
+			payload := map[string]interface{}{
+				"event_source": "sfu",
+				"event":        "online_status",
+				"data": map[string]interface{}{
+					"active_users": members_media_ids,
+					"total_users":  userCount,
+				},
+			}
+
+			jsonBytes, err := json.Marshal(payload)
+			if err != nil {
+				panic(err)
+			}
+
+			go func() {
+				if user.DataChannel != nil {
+					if err := user.DataChannel.Send(jsonBytes); err != nil {
+						user.Offline = true
+						user.OfflineSince = time.Now().Unix()
+					}
+				}
+			}()
 		}
 	}
 }
@@ -161,6 +206,20 @@ func (sfu *CompanySFU) StartHeartBeat() {
 	}()
 }
 
-func (sfu *CompanySFU) CreateRrtForEachUser() {
+func (sfu *CompanySFU) start_instant_renegotiator() {
+	if !sfu.Renegotiating && sfu.RtpSyncNeeded {
+		sysc_user_tracks_and_renegotiate(sfu)
+	}
+}
 
+func (sfu *CompanySFU) Start_instant_renegotiator_caller() {
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			sfu.start_instant_renegotiator()
+		}
+	}()
 }

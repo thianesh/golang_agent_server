@@ -3,6 +3,7 @@ package models
 import (
 	"sync"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -17,6 +18,12 @@ type MemberOutputTrack struct {
 	DataTrack        *webrtc.DataChannel
 	Accessible       bool
 	Status           string
+	AudioBuffer      chan *rtp.Packet
+	VideoBuffer      chan *rtp.Packet
+	PipeAudio        bool
+	PipeVideo        bool
+	AudioPipeLock    sync.Mutex
+	VideoPipeLock    sync.Mutex
 }
 
 type FullConnectionDetails struct {
@@ -44,6 +51,11 @@ type FullConnectionDetails struct {
 	RenegotiateMutex         sync.Mutex
 	SignallingState          webrtc.SignalingState
 	CompanySFU               *CompanySFU
+	VideoRoomsMap            map[string]bool
+	AudioRoomsMap            map[string]bool
+	AudioPipeLockRoom        sync.RWMutex
+	VideoPipeLockRoom        sync.RWMutex
+	OutgoingDataChannel      chan []byte
 }
 
 type RoutingCondition struct {

@@ -40,7 +40,10 @@ func loggingMiddleware(next http.Handler) http.Handler {
 }
 
 var UserConnections = make(map[string]*models.FullConnectionDetails)
+var UserConnectionsMutex = sync.Mutex{}
+
 var CompanySFUs = make(map[string]*models.CompanySFU)
+var CompanySFUsMutex = sync.RWMutex{}
 
 type SDPRequest struct {
 	SDP string `json:"SDP"`
@@ -121,6 +124,7 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	UserConnectionsMutex.Lock()
 	if _, ok := UserConnections[parsed_user_data.User.ID]; ok {
 		logger.Debug(fmt.Sprintf("Existing connection found for %s, connection state: %t", UserConnections[parsed_user_data.User.ID].Email, UserConnections[parsed_user_data.User.ID].Died))
 		if !UserConnections[parsed_user_data.User.ID].Died {
@@ -134,8 +138,10 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
+	UserConnectionsMutex.Unlock()
 	// Add company SFU process to CompanuSFUs
+	CompanySFUsMutex.Lock()
+
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID]; !ok {
 		CompanySFUs[parsed_user_data.CompanyID] = models.NewCompanySFU()
 		// Start SFU processed
@@ -143,9 +149,11 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		go CompanySFUs[parsed_user_data.CompanyID].StartOnlineStatusBroadcaster()
 		// Start sending HeartBeat
 		go CompanySFUs[parsed_user_data.CompanyID].StartHeartBeat()
+		go CompanySFUs[parsed_user_data.CompanyID].Start_instant_renegotiator_caller()
 	}
-
 	CompanySFUs[parsed_user_data.CompanyID].CompanyID = parsed_user_data.CompanyID
+
+	CompanySFUsMutex.Unlock()
 
 	// accepting the offered SDP
 	peer_connection, err := mediaorchestration.CreateAnswer(
@@ -172,12 +180,33 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	UserConnections[parsed_user_data.User.ID].Email = parsed_user_data.User.Email
 	UserConnections[parsed_user_data.User.ID].CompanyId = parsed_user_data.CompanyID
 	UserConnections[parsed_user_data.User.ID].Rooms = []*models.Room{}
+
+	for _, room := range parsed_user_data.Rooms {
+		CompanySFUsMutex.Lock()
+		CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Lock()
+		CompanySFUs[parsed_user_data.CompanyID].Rooms[models.RoomId(room.ID)] = &room
+		CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Unlock()
+		CompanySFUsMutex.Unlock()
+	}
 	// start all webrtc processes
 	go mediaorchestration.SingleOrchestrator(UserConnections[parsed_user_data.User.ID], CompanySFUs[parsed_user_data.CompanyID])
 
 	//setup renegotiation
 	UserConnections[parsed_user_data.User.ID].OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
 		logger.Debug("Data Channel added! adding negotiator.")
+
+		// starting data sending routine
+		go func(conn *models.FullConnectionDetails) {
+			for msg := range conn.OutgoingDataChannel {
+				if conn.DataChannel != nil {
+					err := conn.DataChannel.Send(msg)
+					if err != nil {
+						fmt.Println("Failed to send via datachannel:", err)
+					}
+				}
+			}
+		}(fcd)
+
 		fcd.RenegotiateMutex = sync.Mutex{}
 		mediaorchestration.Initialize_renegotiation(fcd)
 	}
@@ -203,7 +232,7 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 
 func add_track(peerConnection *models.FullConnectionDetails) {
 
-	waitSignallingStable(peerConnection.Webrtc)
+	WaitSignallingStable(peerConnection.Webrtc)
 
 	time.Sleep(30 * time.Second) // simulate “later”
 
@@ -226,7 +255,7 @@ func add_track(peerConnection *models.FullConnectionDetails) {
 	mediaorchestration.Renegotiate(peerConnection)
 }
 
-func waitSignallingStable(pc *webrtc.PeerConnection) {
+func WaitSignallingStable(pc *webrtc.PeerConnection) {
 	for pc.SignalingState() != webrtc.SignalingStateStable {
 		time.Sleep(1 * time.Millisecond)
 	}

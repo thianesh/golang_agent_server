@@ -45,8 +45,10 @@ func CreateOffer() (*models.FullConnectionDetails, error) {
 	return &models.FullConnectionDetails{
 		Webrtc: pc,
 		// VideoSender: videoSender,
-		DataChannel: dc,
-		OfferSDP:    pc.LocalDescription().SDP,
+		DataChannel:   dc,
+		OfferSDP:      pc.LocalDescription().SDP,
+		AudioRoomsMap: make(map[string]bool),
+		VideoRoomsMap: make(map[string]bool),
 	}, nil
 }
 
@@ -135,10 +137,13 @@ func CreateAnswer(
 		// AudioSender:      audioSender,
 		// VideoSenderTrack: videoTrack,
 		// AudioSenderTrack: audioTrack,
-		OfferSDP:     remoteOfferSDP,
-		UserId:       models.UserId(parsed_user_data.User.ID),
-		MemberTracks: map[string]*models.MemberOutputTrack{},
-		CompanySFU:   company_sfu,
+		OfferSDP:            remoteOfferSDP,
+		UserId:              models.UserId(parsed_user_data.User.ID),
+		MemberTracks:        map[string]*models.MemberOutputTrack{},
+		CompanySFU:          company_sfu,
+		AudioRoomsMap:       make(map[string]bool),
+		VideoRoomsMap:       make(map[string]bool),
+		OutgoingDataChannel: make(chan []byte, 250),
 	}
 
 	attach_ontrack_member_track_sync(full_connection, company_sfu)

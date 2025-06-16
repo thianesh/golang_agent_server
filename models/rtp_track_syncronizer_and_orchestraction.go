@@ -7,8 +7,27 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
+
+func Contains(slice []string, value string) bool {
+	for _, v := range slice {
+		if v == value {
+			return true
+		}
+	}
+	return false
+}
+
+func Forward(buf <-chan *rtp.Packet, sender *webrtc.TrackLocalStaticRTP, tag string) {
+	for pkt := range buf {
+		// Always clone; sender rewrites headers in-place
+		if err := sender.WriteRTP(pkt); err != nil {
+			fmt.Printf("[%s] WriteRTP failed: %v", tag, err)
+		}
+	}
+}
 
 func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU) {
 	peer_connection.Webrtc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
@@ -26,7 +45,7 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 				rtp, _, readErr := track.ReadRTP()
 
 				if readErr != nil {
-					fmt.Println("Unable to read RTP")
+					fmt.Println("Unable to read Audio RTP")
 					break
 				}
 
@@ -51,20 +70,56 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 					if user.MemberTracks[string(peer_connection.UserId)] == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId)
+						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
 
 					if user.MemberTracks[string(peer_connection.UserId)].AudioTrack == nil {
 						fmt.Println("Audio track is nill for ", string(peer_connection.UserId))
+						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
 
-					if writeErr := user.MemberTracks[string(peer_connection.UserId)].AudioSenderTrack.WriteRTP(rtp); writeErr != nil {
-						fmt.Println("Unable to Write RTP")
-						continue
+					// Route check
+					peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Lock()
+					should_pipe := peer_connection.MemberTracks[string(user.UserId)].PipeAudio
+					peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Unlock()
+
+					// Route check
+					if should_pipe {
+						select {
+						case user.MemberTracks[string(peer_connection.UserId)].AudioBuffer <- rtp.Clone():
+							continue
+							// successfully passed to buff
+						default:
+							// buff full leaving for now
+						}
 					}
+
+					// now need to chech if user is broadcasing to room and if this particular user is in that room send the media
+					peer_connection.AudioPipeLockRoom.RLock()
+					rooms := peer_connection.AudioRoomsMap
+					peer_connection.AudioPipeLockRoom.RUnlock()
+
+					for room_id, state := range rooms {
+						if !state {
+							continue
+						}
+						if Contains(*company_sfu.Rooms[RoomId(room_id)].AccessList, string(peer_connection.UserId)) {
+							select {
+							case user.MemberTracks[string(peer_connection.UserId)].AudioBuffer <- rtp.Clone():
+								continue
+								// successfully passed to buff
+							default:
+								// buff full leaving for now
+							}
+						}
+					}
+
+					// user.MemberTracks[string(peer_connection.UserId)].AudioBuffer <- rtp.Clone()
+
 				}
 			}
 
@@ -72,13 +127,13 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 			peer_connection.VideoReceiver = track
 
 			// Sending PLI for new connections to receive the video stream
-			SendPLI(track, peer_connection.Webrtc, 10*time.Second)
+			SendPLI(track, peer_connection.Webrtc, 5*time.Second)
 
 			for {
 				rtp, _, readErr := track.ReadRTP()
 
 				if readErr != nil {
-					fmt.Println("Unable to read RTP")
+					fmt.Println("Unable to read Video RTP")
 					break
 				}
 
@@ -103,20 +158,55 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 					if user.MemberTracks[string(peer_connection.UserId)] == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId, "for user", user.Email, user.UserId)
+						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
 
 					if user.MemberTracks[string(peer_connection.UserId)].VideoTrack == nil {
 						fmt.Println("Video track is nill for ", string(peer_connection.UserId), "for user", user.Email, user.UserId)
+						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
 
-					if writeErr := user.MemberTracks[string(peer_connection.UserId)].VideoSenderTrack.WriteRTP(rtp); writeErr != nil {
-						fmt.Println("Unable to Write RTP")
-						continue
+					// Route check
+					peer_connection.MemberTracks[string(user.UserId)].VideoPipeLock.Lock()
+					should_pipe := peer_connection.MemberTracks[string(user.UserId)].PipeVideo
+					peer_connection.MemberTracks[string(user.UserId)].VideoPipeLock.Unlock()
+
+					if should_pipe {
+						select {
+						case user.MemberTracks[string(peer_connection.UserId)].VideoBuffer <- rtp.Clone():
+							continue
+							// successfully passed to buff
+						default:
+							// buff full leaving for now
+						}
 					}
+
+					// now need to chech if user is broadcasing to room and if this particular user is in that room send the media
+					peer_connection.VideoPipeLockRoom.RLock()
+					rooms := peer_connection.VideoRoomsMap
+					peer_connection.VideoPipeLockRoom.RUnlock()
+
+					for room_id, state := range rooms {
+						if !state {
+							continue
+						}
+						if Contains(*company_sfu.Rooms[RoomId(room_id)].AccessList, string(peer_connection.UserId)) {
+							select {
+							case user.MemberTracks[string(peer_connection.UserId)].VideoBuffer <- rtp.Clone():
+								continue
+								// successfully passed to buff
+							default:
+								// buff full leaving for now
+							}
+						}
+					}
+
+					// user.MemberTracks[string(peer_connection.UserId)].VideoBuffer <- rtp.Clone()
+
 				}
 
 			}
@@ -182,6 +272,18 @@ func Renegotiate_no_waitgroup(single_connection *FullConnectionDetails) {
 
 func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 
+	fmt.Println("Entering sysc_user_tracks_and_renegotiate function")
+
+	if !company_sfu.RtpSyncNeeded || company_sfu.Renegotiating {
+		return
+	}
+
+	defer func() {
+		company_sfu.RtpSyncNeeded = false
+		company_sfu.Renegotiating = false
+	}()
+
+	company_sfu.Renegotiating = true
 	fmt.Println("Syncing user tracks and renegotiating...")
 
 	users_to_renegotiate := make([]*FullConnectionDetails, 0)
@@ -216,6 +318,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 						if _, ok := AddAudioTrack(user, company_sfu, users_connction_check); ok {
 							fmt.Println("Added audio track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 							track_exists = true
+
+							// now adding the buffer
+							user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer = make(chan *rtp.Packet, 256)
+							go Forward(user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
 						}
 					}
 				} else {
@@ -223,6 +329,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 					if _, ok := AddAudioTrack(user, company_sfu, users_connction_check); ok {
 						fmt.Println("Added audio track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 						track_exists = true
+
+						// now adding the buffer
+						user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer = make(chan *rtp.Packet, 256)
+						go Forward(user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
 					}
 				}
 
@@ -236,6 +346,11 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 						if _, ok := AddVideoTrack(user, company_sfu, users_connction_check); ok {
 							fmt.Println("Added video track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 							track_exists = true
+
+							// now adding the buffer
+							user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer = make(chan *rtp.Packet, 1024)
+							go Forward(user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer, user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack, string(users_connction_check.UserId)+">> video")
+
 						}
 					}
 				} else {
@@ -243,6 +358,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 					if _, ok := AddVideoTrack(user, company_sfu, users_connction_check); ok {
 						fmt.Println("Added video track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 						track_exists = true
+
+						// now adding the buffer
+						user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer = make(chan *rtp.Packet, 1024)
+						go Forward(user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer, user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack, string(users_connction_check.UserId)+">> video")
 					}
 				}
 
