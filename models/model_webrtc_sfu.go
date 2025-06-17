@@ -56,6 +56,7 @@ type FullConnectionDetails struct {
 	AudioPipeLockRoom        sync.RWMutex
 	VideoPipeLockRoom        sync.RWMutex
 	OutgoingDataChannel      chan []byte
+	DiedLock                 sync.Mutex
 }
 
 type RoutingCondition struct {

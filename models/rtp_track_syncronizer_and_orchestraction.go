@@ -55,6 +55,14 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						continue
 					}
 
+					if _, ok := company_sfu.Users[user.UserId]; !ok {
+						continue
+					}
+
+					if company_sfu.Users[user.UserId] == nil || company_sfu.Users[user.UserId].Webrtc == nil {
+						continue
+					}
+
 					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
 					if user.Webrtc.SignalingState() != webrtc.SignalingStateStable {
 						fmt.Println("Signaling state is not stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState())
@@ -143,6 +151,13 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						continue
 					}
 
+					if _, ok := company_sfu.Users[user.UserId]; !ok {
+						continue
+					}
+
+					if company_sfu.Users[user.UserId] == nil || company_sfu.Users[user.UserId].Webrtc == nil {
+						continue
+					}
 					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
 					if user.Webrtc.SignalingState() != webrtc.SignalingStateStable {
 						fmt.Println("Signaling state is not stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState())

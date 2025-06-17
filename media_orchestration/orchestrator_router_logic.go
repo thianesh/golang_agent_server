@@ -87,6 +87,30 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 						single_connection.MemberTracks[user_id].PipeAudio = pipe_audio
 						single_connection.MemberTracks[user_id].AudioPipeLock.Unlock()
 
+						if user, ok := company_sfu.Users[models.UserId(user_id)]; ok {
+							if user.OutgoingDataChannel == nil {
+								continue
+							}
+							media_route_payload := map[string]interface{}{
+								"event": "media_route_audio",
+								"data": map[string]bool{
+									string(single_connection.UserId): pipe_audio,
+								},
+							}
+
+							route_byte, err := json.Marshal(media_route_payload)
+							if err != nil {
+								continue
+							}
+
+							select {
+							case user.OutgoingDataChannel <- route_byte:
+								// queued
+							default:
+								fmt.Println("OutgoingDataChannel buffer full for", user_id, "- dropping video_room_event message")
+							}
+						}
+
 					}
 				}
 			} else if payload.Type == "video_route" {
@@ -98,6 +122,30 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 						single_connection.MemberTracks[user_id].VideoPipeLock.Lock()
 						single_connection.MemberTracks[user_id].PipeVideo = pipe_video
 						single_connection.MemberTracks[user_id].VideoPipeLock.Unlock()
+
+						if user, ok := company_sfu.Users[models.UserId(user_id)]; ok {
+							if user.OutgoingDataChannel == nil {
+								continue
+							}
+							media_route_payload := map[string]interface{}{
+								"event": "media_route_video",
+								"data": map[string]bool{
+									string(single_connection.UserId): pipe_video,
+								},
+							}
+
+							route_byte, err := json.Marshal(media_route_payload)
+							if err != nil {
+								continue
+							}
+
+							select {
+							case user.OutgoingDataChannel <- route_byte:
+								// queued
+							default:
+								fmt.Println("OutgoingDataChannel buffer full for", user_id, "- dropping video_room_event message")
+							}
+						}
 
 					}
 				}
@@ -138,7 +186,7 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 				// Final payload with *all* rooms
 				room_payload := map[string]interface{}{
 					string(single_connection.UserId): &broadcastMap,
-					"event":                           "video_room_event",
+					"event":                          "video_room_event",
 				}
 
 				room_broadcast_bytes, err := json.Marshal(&room_payload)
@@ -206,7 +254,7 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 				// Prepare final payload
 				room_payload := map[string]interface{}{
 					string(single_connection.UserId): &broadcastMap,
-					"event":                           "audio_room_event",
+					"event":                          "audio_room_event",
 				}
 
 				room_broadcast_bytes, err := json.Marshal(&room_payload)
@@ -263,7 +311,9 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 		webrtc.PeerConnectionStateClosed:
 		fmt.Println("Connection closed/disconnected. Exiting goroutine.")
 		closeDone()
+		single_connection.DiedLock.Lock()
 		single_connection.Died = true
+		single_connection.DiedLock.Unlock()
 	}
 
 	single_connection.Webrtc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
@@ -275,7 +325,9 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 			webrtc.PeerConnectionStateClosed:
 			fmt.Println("Connection closed/disconnected. Exiting goroutine.")
 			closeDone()
+			single_connection.DiedLock.Lock()
 			single_connection.Died = true
+			single_connection.DiedLock.Unlock()
 			single_connection.MemberTracks = map[string]*models.MemberOutputTrack{}
 			company_sfu.SendOnlineStatus()
 
