@@ -20,6 +20,8 @@ type MemberOutputTrack struct {
 	Status           string
 	AudioBuffer      chan *rtp.Packet
 	VideoBuffer      chan *rtp.Packet
+	AudioBufferClose sync.Mutex
+	VideoBufferClose sync.Mutex
 	PipeAudio        bool
 	PipeVideo        bool
 	AudioPipeLock    sync.Mutex
@@ -57,6 +59,7 @@ type FullConnectionDetails struct {
 	VideoPipeLockRoom        sync.RWMutex
 	OutgoingDataChannel      chan []byte
 	DiedLock                 sync.Mutex
+	MemberLock               sync.Mutex
 }
 
 type RoutingCondition struct {

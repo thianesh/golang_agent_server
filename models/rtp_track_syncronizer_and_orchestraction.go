@@ -51,6 +51,7 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 				for _, user := range company_sfu.Users {
 
+
 					if user.UserId == peer_connection.UserId {
 						continue
 					}
@@ -90,6 +91,9 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						continue
 					}
 
+					if peer_connection.MemberTracks[string(user.UserId)] == nil {
+						continue
+					}
 					// Route check
 					peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Lock()
 					should_pipe := peer_connection.MemberTracks[string(user.UserId)].PipeAudio
@@ -182,6 +186,10 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						fmt.Println("Video track is nill for ", string(peer_connection.UserId), "for user", user.Email, user.UserId)
 						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						continue
+					}
+
+					if peer_connection.MemberTracks[string(user.UserId)] == nil {
 						continue
 					}
 

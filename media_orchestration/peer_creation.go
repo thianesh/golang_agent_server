@@ -11,7 +11,15 @@ import (
 
 func CreateOffer() (*models.FullConnectionDetails, error) {
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
+		ICETransportPolicy: webrtc.ICETransportPolicyAll,
+		ICEServers: []webrtc.ICEServer{
+			// {
+			// 	URLs:           []string{"turn:jo.vldo.in:3478?transport=udp"},
+			// 	Username:       "thianesh",
+			// 	Credential:     "kjroitshhinmaanni",
+			// 	CredentialType: webrtc.ICECredentialTypePassword,
+			// },
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -94,8 +102,15 @@ func CreateAnswer(
 
 	// pc, err := api.NewPeerConnection(webrtc.Configuration{
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{
-
-		ICEServers: []webrtc.ICEServer{{URLs: []string{"stun:stun.l.google.com:19302"}}},
+		ICETransportPolicy: webrtc.ICETransportPolicyAll,
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs:           []string{"turn:jo.vldo.in:3478"},
+				Username:       "thianesh",
+				Credential:     "kjroitshhinmaanni",
+				CredentialType: webrtc.ICECredentialTypePassword,
+			},
+		},
 	})
 	if err != nil {
 		return nil, err

@@ -135,6 +135,7 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 				"error": "User connection already exists. Please exit that connection to connect here.",
 			})
 
+			UserConnectionsMutex.Unlock()
 			return
 		}
 	}

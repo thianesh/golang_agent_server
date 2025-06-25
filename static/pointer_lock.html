@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pointer-lock demo</title>
+  <style>
+    #playArea {
+      width: 600px;
+      height: 400px;
+      background: #1e293b;
+      color: #d1d5db;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font: 1.2rem sans-serif;
+      user-select: none;
+      cursor: crosshair;         /* visible before lock */
+    }
+    /* Pointer-lock automatically hides the system cursor,
+       but if you want it hidden BEFORE lock as well:       */
+    #playArea.hide-cursor {
+      cursor: none;              /* optional */
+    }
+  </style>
+</head>
+<body>
+  <div id="playArea">Click to lock cursor</div>
+
+  <script>
+    const area = document.getElementById('playArea');
+
+    // 1️⃣  Ask for pointer-lock after a user gesture
+    area.addEventListener('click', () => {
+      area.requestPointerLock({ unadjustedMovement: true }); // optional flag
+    });
+
+    // 2️⃣  Track locking / unlocking
+    document.addEventListener('pointerlockchange', () => {
+      const locked = document.pointerLockElement === area;
+      if (locked) {
+        area.textContent = 'Move mouse…  Press Esc to unlock';
+        area.classList.add('hide-cursor'); // if you want it gone pre-lock too
+        // While locked, use `mousemove` to read deltas:
+        document.addEventListener('mousemove', onMove);
+      } else {
+        area.textContent = 'Click to lock cursor';
+        area.classList.remove('hide-cursor');
+        document.removeEventListener('mousemove', onMove);
+      }
+    });
+
+    function onMove(e) {
+      // e.movementX / e.movementY give relative movement while locked
+      // (cursor never “hits the edge” of the screen)
+      console.log(`dx=${e.movementX}, dy=${e.movementY}`);
+    }
+
+    // 3️⃣  Handle errors (user denied, insecure context, etc.)
+    document.addEventListener('pointerlockerror', () =>
+      alert('Pointer-lock request failed')
+    );
+  </script>
+</body>
+</html>

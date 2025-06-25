@@ -27,6 +27,7 @@ type payload_struct struct {
 	Audio_route_room route_struct `json:"audio_route_room,omitempty"`
 	Video_route_room route_struct `json:"video_route_room,omitempty"`
 	Data             string       `json:"data,omitempty"`
+	Route_to         string       `json:"route_to,omitempty"`
 }
 
 type VideoStatus struct {
@@ -284,6 +285,35 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 						sent[uid] = true
 					}
 				}
+			} else if payload.Type == "route_to" {
+				to_address := payload.Route_to
+				if to_address == "" {
+					return
+				}
+				user, ok := company_sfu.Users[models.UserId(to_address)]
+				if !ok || user.Died || user.Webrtc == nil {
+					return
+				}
+
+				room_payload := map[string]interface{}{
+					"data":       payload.Data,
+					"route_to":   payload.Route_to,
+					"route_from": single_connection.UserId,
+					"Type":       payload.Type,
+				}
+
+				room_broadcast_bytes, err := json.Marshal(&room_payload)
+				if err != nil {
+					fmt.Println("Failed to marshal audio_room_event payload:", err)
+					return
+				}
+
+				select {
+				case user.OutgoingDataChannel <- room_broadcast_bytes:
+				default:
+					fmt.Println("OutgoingDataChannel buffer full for", user.UserId, "- dropping audio_room_event message")
+				}
+
 			}
 
 			if payload.Type == "data" {
@@ -341,9 +371,17 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 				for member_id := range user.MemberTracks {
 					if member_id == string(single_connection.UserId) {
 
+						user.MemberLock.Lock()
 						if user.MemberTracks[member_id].AudioTrack != nil {
 							user.MemberTracks[member_id].AudioTrack.Stop()
-							close(user.MemberTracks[member_id].AudioBuffer)
+
+							user.MemberTracks[member_id].AudioBufferClose.Lock()
+							if user.MemberTracks[member_id].AudioBuffer != nil {
+								close(user.MemberTracks[member_id].AudioBuffer)
+								user.MemberTracks[member_id].AudioBuffer = nil
+							}
+							user.MemberTracks[member_id].AudioBufferClose.Unlock()
+
 							err := user.Webrtc.RemoveTrack(user.MemberTracks[member_id].AudioTrack)
 							if err != nil {
 								fmt.Println("Error removing audio track:", err)
@@ -351,14 +389,22 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 						}
 						if user.MemberTracks[member_id].VideoTrack != nil {
 							user.MemberTracks[member_id].VideoTrack.Stop()
-							close(user.MemberTracks[member_id].VideoBuffer)
+
+							user.MemberTracks[member_id].VideoBufferClose.Lock()
+							if user.MemberTracks[member_id].VideoBuffer != nil {
+								close(user.MemberTracks[member_id].VideoBuffer)
+								user.MemberTracks[member_id].VideoBuffer = nil
+							}
+							user.MemberTracks[member_id].VideoBufferClose.Unlock()
+
 							err := user.Webrtc.RemoveTrack(user.MemberTracks[member_id].VideoTrack)
 							if err != nil {
 								fmt.Println("Error removing video track:", err)
 							}
 						}
-
 						delete(user.MemberTracks, member_id)
+						user.MemberLock.Unlock()
+
 						fmt.Println("Removed member track for user:", user.UserId, "member_id:", member_id)
 						fmt.Println(">>>>>>>>> Intiating removed re-negotiation <<<<<<<<")
 						if !user.Died && user.Webrtc != nil {
