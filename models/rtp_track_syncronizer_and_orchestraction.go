@@ -380,7 +380,7 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 
 				// If audio track is not present for the user, we will add it
 				user.MemberLock.Lock()
-				mt, ok = user.MemberTracks[string(users_connction_check.UserId)]
+				mt, ok := user.MemberTracks[string(users_connction_check.UserId)]
 				user.MemberLock.Unlock()
 				if ok {
 					if mt.VideoSenderTrack == nil {
