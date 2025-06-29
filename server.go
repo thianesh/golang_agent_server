@@ -169,6 +169,8 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var conn *models.FullConnectionDetails
+	UserConnectionsMutex.Lock()
 	UserConnections[parsed_user_data.User.ID] = peer_connection
 
 	UserConnections[parsed_user_data.User.ID].OfferSDP = payload.SDP
@@ -181,6 +183,8 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	UserConnections[parsed_user_data.User.ID].Email = parsed_user_data.User.Email
 	UserConnections[parsed_user_data.User.ID].CompanyId = parsed_user_data.CompanyID
 	UserConnections[parsed_user_data.User.ID].Rooms = []*models.Room{}
+	conn = UserConnections[parsed_user_data.User.ID]
+	UserConnectionsMutex.Unlock()
 
 	for _, room := range parsed_user_data.Rooms {
 		CompanySFUsMutex.Lock()
@@ -190,10 +194,11 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		CompanySFUsMutex.Unlock()
 	}
 	// start all webrtc processes
-	go mediaorchestration.SingleOrchestrator(UserConnections[parsed_user_data.User.ID], CompanySFUs[parsed_user_data.CompanyID])
+	go mediaorchestration.SingleOrchestrator(conn, CompanySFUs[parsed_user_data.CompanyID])
 
 	//setup renegotiation
-	UserConnections[parsed_user_data.User.ID].OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
+	UserConnectionsMutex.Lock()
+	conn.OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
 		logger.Debug("Data Channel added! adding negotiator.")
 
 		// starting data sending routine
@@ -211,13 +216,14 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		fcd.RenegotiateMutex = sync.Mutex{}
 		mediaorchestration.Initialize_renegotiation(fcd)
 	}
+	UserConnectionsMutex.Unlock()
 
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; !ok {
-		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = UserConnections[parsed_user_data.User.ID]
+		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = conn
 	}
 
 	res_payload := map[string]interface{}{
-		"SDP":    EncodeToBase64(UserConnections[parsed_user_data.User.ID].AnswerSDP),
+		"SDP":    EncodeToBase64(conn.AnswerSDP),
 		"status": "success",
 	}
 
