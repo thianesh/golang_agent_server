@@ -218,9 +218,11 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	}
 	UserConnectionsMutex.Unlock()
 
+	CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Lock()
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; !ok {
 		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = conn
 	}
+	CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Unlock()
 
 	res_payload := map[string]interface{}{
 		"SDP":    EncodeToBase64(conn.AnswerSDP),

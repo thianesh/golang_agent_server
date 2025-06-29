@@ -33,7 +33,9 @@ func NewCompanySFU() *CompanySFU {
 }
 
 func (sfu *CompanySFU) RemoveUser(userId UserId) {
+	sfu.CompanySFUsMutex.Lock()
 	delete(sfu.Users, userId)
+	sfu.CompanySFUsMutex.Unlock()
 }
 
 func (sfu *CompanySFU) Heartbeat() {
