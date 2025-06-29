@@ -88,7 +88,10 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 						single_connection.MemberTracks[user_id].PipeAudio = pipe_audio
 						single_connection.MemberTracks[user_id].AudioPipeLock.Unlock()
 
-						if user, ok := company_sfu.Users[models.UserId(user_id)]; ok {
+						company_sfu.CompanySFUsMutex.RLock()
+						user, ok := company_sfu.Users[models.UserId(user_id)]
+						company_sfu.CompanySFUsMutex.RUnlock()
+						if ok {
 							if user.OutgoingDataChannel == nil {
 								continue
 							}
@@ -124,7 +127,10 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 						single_connection.MemberTracks[user_id].PipeVideo = pipe_video
 						single_connection.MemberTracks[user_id].VideoPipeLock.Unlock()
 
-						if user, ok := company_sfu.Users[models.UserId(user_id)]; ok {
+						company_sfu.CompanySFUsMutex.RLock()
+						user, ok := company_sfu.Users[models.UserId(user_id)]
+						company_sfu.CompanySFUsMutex.RUnlock()
+						if ok {
 							if user.OutgoingDataChannel == nil {
 								continue
 							}
@@ -199,13 +205,17 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 				// Send one message per user (even if they’re in multiple rooms)
 				sent := map[models.UserId]bool{}
 				for room_id := range broadcastMap {
+					company_sfu.CompanySFUsMutex.RLock()
 					room := company_sfu.Rooms[room_id]
+					company_sfu.CompanySFUsMutex.RUnlock()
 					for _, room_member_id := range *room.AccessList {
 						uid := models.UserId(room_member_id)
 						if sent[uid] {
 							continue
 						}
+						company_sfu.CompanySFUsMutex.RLock()
 						user, ok := company_sfu.Users[uid]
+						company_sfu.CompanySFUsMutex.RUnlock()
 						if !ok || user.DataChannel == nil {
 							continue
 						}
@@ -267,13 +277,17 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 				// Send one message to all room members
 				sent := map[models.UserId]bool{}
 				for room_id := range broadcastMap {
+					company_sfu.CompanySFUsMutex.RLock()
 					room := company_sfu.Rooms[room_id]
+					company_sfu.CompanySFUsMutex.RUnlock()
 					for _, room_member_id := range *room.AccessList {
 						uid := models.UserId(room_member_id)
 						if sent[uid] {
 							continue
 						}
+						company_sfu.CompanySFUsMutex.RLock()
 						user, ok := company_sfu.Users[uid]
+						company_sfu.CompanySFUsMutex.RUnlock()
 						if !ok || user.DataChannel == nil {
 							continue
 						}
@@ -290,7 +304,9 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 				if to_address == "" {
 					return
 				}
+				company_sfu.CompanySFUsMutex.RLock()
 				user, ok := company_sfu.Users[models.UserId(to_address)]
+				company_sfu.CompanySFUsMutex.RUnlock()
 				if !ok || user.Died || user.Webrtc == nil {
 					return
 				}
@@ -361,9 +377,12 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 			single_connection.MemberTracks = map[string]*models.MemberOutputTrack{}
 			company_sfu.SendOnlineStatus()
 
+			company_sfu.CompanySFUsMutex.Lock()
 			delete(company_sfu.Users, single_connection.UserId)
+			company_sfu.CompanySFUsMutex.Unlock()
 
 			// now I have to remove this member track from all the users.
+			company_sfu.CompanySFUsMutex.RLock()
 			for _, user := range company_sfu.Users {
 				if user.MemberTracks == nil {
 					continue
@@ -420,6 +439,7 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 						break
 					}
 				}
+				company_sfu.CompanySFUsMutex.RUnlock()
 			}
 		}
 	})

@@ -33,10 +33,13 @@ func NewCompanySFU() *CompanySFU {
 }
 
 func (sfu *CompanySFU) RemoveUser(userId UserId) {
+	sfu.CompanySFUsMutex.Lock()
+	defer sfu.CompanySFUsMutex.Unlock()
 	delete(sfu.Users, userId)
 }
 
 func (sfu *CompanySFU) Heartbeat() {
+	sfu.CompanySFUsMutex.RLock()
 	for _, user := range sfu.Users {
 		if user.Died {
 			continue
@@ -65,16 +68,21 @@ func (sfu *CompanySFU) Heartbeat() {
 	}
 
 	// remove dead users
+	sfu.CompanySFUsMutex.RUnlock()
+
+	sfu.CompanySFUsMutex.Lock()
 	for userId, user := range sfu.Users {
 		if user.Died {
 			user.Webrtc.Close()
-			sfu.RemoveUser(userId)
+			delete(sfu.Users, userId)
 			continue
 		}
 	}
+	sfu.CompanySFUsMutex.Unlock()
 }
 
 func (sfu *CompanySFU) SendOnlineStatus() {
+	sfu.CompanySFUsMutex.RLock()
 	userCount := len(sfu.Users)
 	// UserActiveList := []UserId{}
 
@@ -146,10 +154,12 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 			}()
 		}
 	}
+	sfu.CompanySFUsMutex.RUnlock()
 }
 
 func (sfu *CompanySFU) Destroy() {
 	// Close all user connections
+	sfu.CompanySFUsMutex.Lock()
 	for _, user := range sfu.Users {
 		if user.Webrtc != nil {
 			user.Webrtc.Close()
@@ -168,6 +178,7 @@ func (sfu *CompanySFU) Destroy() {
 	// Clear maps
 	sfu.Users = nil
 	sfu.Rooms = nil
+	sfu.CompanySFUsMutex.Unlock()
 }
 
 func (sfu *CompanySFU) StartOnlineStatusBroadcaster() {

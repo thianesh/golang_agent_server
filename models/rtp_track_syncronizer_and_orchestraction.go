@@ -51,16 +51,18 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 				for _, user := range company_sfu.Users {
 
-
 					if user.UserId == peer_connection.UserId {
 						continue
 					}
 
-					if _, ok := company_sfu.Users[user.UserId]; !ok {
+					company_sfu.CompanySFUsMutex.RLock()
+					u, ok := company_sfu.Users[user.UserId]
+					company_sfu.CompanySFUsMutex.RUnlock()
+					if !ok {
 						continue
 					}
 
-					if company_sfu.Users[user.UserId] == nil || company_sfu.Users[user.UserId].Webrtc == nil {
+					if u == nil || u.Webrtc == nil {
 						continue
 					}
 
@@ -155,11 +157,14 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						continue
 					}
 
-					if _, ok := company_sfu.Users[user.UserId]; !ok {
+					company_sfu.CompanySFUsMutex.RLock()
+					u, ok := company_sfu.Users[user.UserId]
+					company_sfu.CompanySFUsMutex.RUnlock()
+					if !ok {
 						continue
 					}
 
-					if company_sfu.Users[user.UserId] == nil || company_sfu.Users[user.UserId].Webrtc == nil {
+					if u == nil || u.Webrtc == nil {
 						continue
 					}
 					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
@@ -330,8 +335,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 
 			track_exists := false
 
+			company_sfu.CompanySFUsMutex.RLock()
 			audio_track := company_sfu.Users[users_connction_check.UserId].AudioReceiver
 			video_track := company_sfu.Users[users_connction_check.UserId].VideoReceiver
+			company_sfu.CompanySFUsMutex.RUnlock()
 
 			if audio_track != nil {
 
@@ -399,11 +406,14 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 
 func AddAudioTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_connction_check *FullConnectionDetails) (error, bool) {
 
-	if _, ok := company_sfu.Users[users_connction_check.UserId]; !ok {
+	company_sfu.CompanySFUsMutex.RLock()
+	trackUser, ok := company_sfu.Users[users_connction_check.UserId]
+	company_sfu.CompanySFUsMutex.RUnlock()
+	if !ok {
 		return fmt.Errorf("user not found in company sfu"), false
 	}
 
-	track := company_sfu.Users[users_connction_check.UserId].AudioReceiver
+	track := trackUser.AudioReceiver
 
 	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{
@@ -446,11 +456,14 @@ func AddAudioTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_c
 
 func AddVideoTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_connction_check *FullConnectionDetails) (error, bool) {
 
-	if _, ok := company_sfu.Users[users_connction_check.UserId]; !ok {
+	company_sfu.CompanySFUsMutex.RLock()
+	trackUser, ok := company_sfu.Users[users_connction_check.UserId]
+	company_sfu.CompanySFUsMutex.RUnlock()
+	if !ok {
 		return fmt.Errorf("user not found in company sfu"), false
 	}
 
-	track := company_sfu.Users[users_connction_check.UserId].VideoReceiver
+	track := trackUser.VideoReceiver
 
 	VideoTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{
