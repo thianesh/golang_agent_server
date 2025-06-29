@@ -106,7 +106,6 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 					audio_track_id = member_track.AudioSenderTrack.ID()
 					audio_stream_id = member_track.AudioSenderTrack.StreamID()
 				}
-				user.MemberLock.Unlock()
 				if member_track.VideoTrack != nil {
 					video_track_id = member_track.VideoSenderTrack.ID()
 					video_stream_id = member_track.VideoSenderTrack.StreamID()
@@ -118,6 +117,7 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 					"video_stream": video_stream_id,
 				}
 			}
+			user.MemberLock.Unlock()
 
 			members_media_ids[user.UserId] = media_details{
 				"audio":        "",
