@@ -113,8 +113,8 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debug("Response from target server", "data", parsed_user_data)
 	// Optional: Write the response back to the original client
-	w.WriteHeader(resp.StatusCode)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
 
 	// Now we have the SDP and user details, we can accept the connection
 	sdp, err := DecodeFromBase64(payload.SDP)
