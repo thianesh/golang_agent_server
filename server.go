@@ -212,9 +212,11 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		mediaorchestration.Initialize_renegotiation(fcd)
 	}
 
+	CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Lock()
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; !ok {
 		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = UserConnections[parsed_user_data.User.ID]
 	}
+	CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Unlock()
 
 	res_payload := map[string]interface{}{
 		"SDP":    EncodeToBase64(UserConnections[parsed_user_data.User.ID].AnswerSDP),
