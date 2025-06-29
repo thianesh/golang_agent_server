@@ -51,7 +51,6 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 				for _, user := range company_sfu.Users {
 
-
 					if user.UserId == peer_connection.UserId {
 						continue
 					}
@@ -77,32 +76,38 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 					// fmt.Println("Signaling state is stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState(), "and peer connection", peer_connection.Email, peer_connection.UserId, "state:", peer_connection.Webrtc.SignalingState())
 
-					if user.MemberTracks[string(peer_connection.UserId)] == nil {
+					user.MemberLock.Lock()
+					memberTrack := user.MemberTracks[string(peer_connection.UserId)]
+					user.MemberLock.Unlock()
+					if memberTrack == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId)
 						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
 
-					if user.MemberTracks[string(peer_connection.UserId)].AudioTrack == nil {
+					if memberTrack.AudioTrack == nil {
 						fmt.Println("Audio track is nill for ", string(peer_connection.UserId))
 						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
 
-					if peer_connection.MemberTracks[string(user.UserId)] == nil {
+					peer_connection.MemberLock.Lock()
+					peerTrack := peer_connection.MemberTracks[string(user.UserId)]
+					peer_connection.MemberLock.Unlock()
+					if peerTrack == nil {
 						continue
 					}
 					// Route check
-					peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Lock()
-					should_pipe := peer_connection.MemberTracks[string(user.UserId)].PipeAudio
-					peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Unlock()
+					peerTrack.AudioPipeLock.Lock()
+					should_pipe := peerTrack.PipeAudio
+					peerTrack.AudioPipeLock.Unlock()
 
 					// Route check
 					if should_pipe {
 						select {
-						case user.MemberTracks[string(peer_connection.UserId)].AudioBuffer <- rtp.Clone():
+						case memberTrack.AudioBuffer <- rtp.Clone():
 							continue
 							// successfully passed to buff
 						default:
@@ -121,7 +126,7 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						}
 						if Contains(*company_sfu.Rooms[RoomId(room_id)].AccessList, string(peer_connection.UserId)) {
 							select {
-							case user.MemberTracks[string(peer_connection.UserId)].AudioBuffer <- rtp.Clone():
+							case memberTrack.AudioBuffer <- rtp.Clone():
 								continue
 								// successfully passed to buff
 							default:
@@ -175,32 +180,37 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 					// fmt.Println("Signaling state is stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState(), "and peer connection", peer_connection.Email, peer_connection.UserId, "state:", peer_connection.Webrtc.SignalingState())
 
-					if user.MemberTracks[string(peer_connection.UserId)] == nil {
+					user.MemberLock.Lock()
+					memberTrack := user.MemberTracks[string(peer_connection.UserId)]
+					user.MemberLock.Unlock()
+					if memberTrack == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId, "for user", user.Email, user.UserId)
 						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
-
-					if user.MemberTracks[string(peer_connection.UserId)].VideoTrack == nil {
+					if memberTrack.VideoTrack == nil {
 						fmt.Println("Video track is nill for ", string(peer_connection.UserId), "for user", user.Email, user.UserId)
 						company_sfu.RtpSyncNeeded = true
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
 
-					if peer_connection.MemberTracks[string(user.UserId)] == nil {
+					peer_connection.MemberLock.Lock()
+					peerTrack := peer_connection.MemberTracks[string(user.UserId)]
+					peer_connection.MemberLock.Unlock()
+					if peerTrack == nil {
 						continue
 					}
 
 					// Route check
-					peer_connection.MemberTracks[string(user.UserId)].VideoPipeLock.Lock()
-					should_pipe := peer_connection.MemberTracks[string(user.UserId)].PipeVideo
-					peer_connection.MemberTracks[string(user.UserId)].VideoPipeLock.Unlock()
+					peerTrack.VideoPipeLock.Lock()
+					should_pipe := peerTrack.PipeVideo
+					peerTrack.VideoPipeLock.Unlock()
 
 					if should_pipe {
 						select {
-						case user.MemberTracks[string(peer_connection.UserId)].VideoBuffer <- rtp.Clone():
+						case memberTrack.VideoBuffer <- rtp.Clone():
 							continue
 							// successfully passed to buff
 						default:
@@ -219,7 +229,7 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						}
 						if Contains(*company_sfu.Rooms[RoomId(room_id)].AccessList, string(peer_connection.UserId)) {
 							select {
-							case user.MemberTracks[string(peer_connection.UserId)].VideoBuffer <- rtp.Clone():
+							case memberTrack.VideoBuffer <- rtp.Clone():
 								continue
 								// successfully passed to buff
 							default:
@@ -317,9 +327,11 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 			continue
 		}
 
+		user.MemberLock.Lock()
 		if user.MemberTracks == nil {
 			user.MemberTracks = map[string]*MemberOutputTrack{}
 		}
+		user.MemberLock.Unlock()
 
 		// Each user should have all the memebers connection except his own
 		for _, users_connction_check := range company_sfu.Users {
@@ -336,15 +348,18 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 			if audio_track != nil {
 
 				// If audio track is not present for the user, we will add it
-				if _, ok := user.MemberTracks[string(users_connction_check.UserId)]; ok {
-					if user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack == nil {
+				user.MemberLock.Lock()
+				mt, ok := user.MemberTracks[string(users_connction_check.UserId)]
+				user.MemberLock.Unlock()
+				if ok {
+					if mt.AudioSenderTrack == nil {
 						if _, ok := AddAudioTrack(user, company_sfu, users_connction_check); ok {
 							fmt.Println("Added audio track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 							track_exists = true
-
-							// now adding the buffer
+							user.MemberLock.Lock()
 							user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer = make(chan *rtp.Packet, 256)
 							go Forward(user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
+							user.MemberLock.Unlock()
 						}
 					}
 				} else {
@@ -352,10 +367,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 					if _, ok := AddAudioTrack(user, company_sfu, users_connction_check); ok {
 						fmt.Println("Added audio track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 						track_exists = true
-
-						// now adding the buffer
+						user.MemberLock.Lock()
 						user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer = make(chan *rtp.Packet, 256)
 						go Forward(user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
+						user.MemberLock.Unlock()
 					}
 				}
 
@@ -364,15 +379,18 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 			if video_track != nil {
 
 				// If audio track is not present for the user, we will add it
-				if _, ok := user.MemberTracks[string(users_connction_check.UserId)]; ok {
-					if user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack == nil {
+				user.MemberLock.Lock()
+				mt, ok = user.MemberTracks[string(users_connction_check.UserId)]
+				user.MemberLock.Unlock()
+				if ok {
+					if mt.VideoSenderTrack == nil {
 						if _, ok := AddVideoTrack(user, company_sfu, users_connction_check); ok {
 							fmt.Println("Added video track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 							track_exists = true
-
-							// now adding the buffer
+							user.MemberLock.Lock()
 							user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer = make(chan *rtp.Packet, 1024)
 							go Forward(user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer, user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack, string(users_connction_check.UserId)+">> video")
+							user.MemberLock.Unlock()
 
 						}
 					}
@@ -381,10 +399,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 					if _, ok := AddVideoTrack(user, company_sfu, users_connction_check); ok {
 						fmt.Println("Added video track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 						track_exists = true
-
-						// now adding the buffer
+						user.MemberLock.Lock()
 						user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer = make(chan *rtp.Packet, 1024)
 						go Forward(user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer, user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack, string(users_connction_check.UserId)+">> video")
+						user.MemberLock.Unlock()
 					}
 				}
 
@@ -429,6 +447,7 @@ func AddAudioTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_c
 		return err, false
 	}
 
+	user.MemberLock.Lock()
 	if user.MemberTracks[string(users_connction_check.UserId)] == nil {
 		user.MemberTracks[string(users_connction_check.UserId)] = &MemberOutputTrack{
 			Accessible: true,
@@ -441,6 +460,7 @@ func AddAudioTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_c
 	user.MemberTracks[string(users_connction_check.UserId)].DataTrack = users_connction_check.DataChannel
 	user.MemberTracks[string(users_connction_check.UserId)].Status = "online"
 	user.MemberTracks[string(users_connction_check.UserId)].Accessible = true
+	user.MemberLock.Unlock()
 	return nil, true
 }
 
@@ -476,6 +496,7 @@ func AddVideoTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_c
 		return err, false
 	}
 
+	user.MemberLock.Lock()
 	if user.MemberTracks[string(users_connction_check.UserId)] == nil {
 		user.MemberTracks[string(users_connction_check.UserId)] = &MemberOutputTrack{
 			Accessible: true,
@@ -488,6 +509,7 @@ func AddVideoTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_c
 	user.MemberTracks[string(users_connction_check.UserId)].DataTrack = users_connction_check.DataChannel
 	user.MemberTracks[string(users_connction_check.UserId)].Status = "online"
 	user.MemberTracks[string(users_connction_check.UserId)].Accessible = true
+	user.MemberLock.Unlock()
 	return nil, true
 }
 

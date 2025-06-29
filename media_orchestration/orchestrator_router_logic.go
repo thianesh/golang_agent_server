@@ -81,13 +81,17 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 			} else if payload.Type == "audio_route" {
 				fmt.Println("Received audio route data:", payload.Audio_route)
 				for user_id, pipe_audio := range payload.Audio_route {
-					if single_connection.MemberTracks != nil &&
-						single_connection.MemberTracks[user_id] != nil {
-
+					single_connection.MemberLock.Lock()
+					trackExists := single_connection.MemberTracks != nil &&
+						single_connection.MemberTracks[user_id] != nil
+					if trackExists {
 						single_connection.MemberTracks[user_id].AudioPipeLock.Lock()
 						single_connection.MemberTracks[user_id].PipeAudio = pipe_audio
 						single_connection.MemberTracks[user_id].AudioPipeLock.Unlock()
+					}
+					single_connection.MemberLock.Unlock()
 
+					if trackExists {
 						if user, ok := company_sfu.Users[models.UserId(user_id)]; ok {
 							if user.OutgoingDataChannel == nil {
 								continue
@@ -117,13 +121,17 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 			} else if payload.Type == "video_route" {
 				fmt.Println("Received video route data:", payload.Video_route)
 				for user_id, pipe_video := range payload.Video_route {
-					if single_connection.MemberTracks != nil &&
-						single_connection.MemberTracks[user_id] != nil {
-
+					single_connection.MemberLock.Lock()
+					trackExists := single_connection.MemberTracks != nil &&
+						single_connection.MemberTracks[user_id] != nil
+					if trackExists {
 						single_connection.MemberTracks[user_id].VideoPipeLock.Lock()
 						single_connection.MemberTracks[user_id].PipeVideo = pipe_video
 						single_connection.MemberTracks[user_id].VideoPipeLock.Unlock()
+					}
+					single_connection.MemberLock.Unlock()
 
+					if trackExists {
 						if user, ok := company_sfu.Users[models.UserId(user_id)]; ok {
 							if user.OutgoingDataChannel == nil {
 								continue
@@ -358,20 +366,23 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 			single_connection.DiedLock.Lock()
 			single_connection.Died = true
 			single_connection.DiedLock.Unlock()
+			single_connection.MemberLock.Lock()
 			single_connection.MemberTracks = map[string]*models.MemberOutputTrack{}
+			single_connection.MemberLock.Unlock()
 			company_sfu.SendOnlineStatus()
 
 			delete(company_sfu.Users, single_connection.UserId)
 
 			// now I have to remove this member track from all the users.
 			for _, user := range company_sfu.Users {
+				user.MemberLock.Lock()
 				if user.MemberTracks == nil {
+					user.MemberLock.Unlock()
 					continue
 				}
+				removed := false
 				for member_id := range user.MemberTracks {
 					if member_id == string(single_connection.UserId) {
-
-						user.MemberLock.Lock()
 						if user.MemberTracks[member_id].AudioTrack != nil {
 							user.MemberTracks[member_id].AudioTrack.Stop()
 
@@ -418,6 +429,9 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 							fmt.Println("User is dead or WebRTC is nil, skipping renegotiation.")
 						}
 						break
+					}
+					if !removed {
+						user.MemberLock.Unlock()
 					}
 				}
 			}
