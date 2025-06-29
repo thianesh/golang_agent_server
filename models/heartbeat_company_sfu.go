@@ -93,6 +93,7 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 
 			members_media_ids := make(map[UserId]media_details, userCount)
 
+			user.MemberLock.Lock()
 			for member_id, member_track := range user.MemberTracks {
 				audio_track_id := ""
 				video_track_id := ""
@@ -103,6 +104,7 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 					audio_track_id = member_track.AudioSenderTrack.ID()
 					audio_stream_id = member_track.AudioSenderTrack.StreamID()
 				}
+				user.MemberLock.Unlock()
 				if member_track.VideoTrack != nil {
 					video_track_id = member_track.VideoSenderTrack.ID()
 					video_stream_id = member_track.VideoSenderTrack.StreamID()
