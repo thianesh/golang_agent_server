@@ -13,9 +13,8 @@ import (
 	mediaorchestration "thianesh/web_server/media_orchestration"
 	"thianesh/web_server/models"
 	"time"
-
+	"thianesh/web_server/hystersisloadmanagement"
 	"github.com/pion/webrtc/v4"
-
 	"github.com/rs/cors"
 )
 
@@ -270,8 +269,12 @@ func WaitSignallingStable(pc *webrtc.PeerConnection) {
 	}
 }
 
+var usage hystersisloadmanagement.SystemConsumption
+var mu sync.RWMutex
+
 func main() {
 
+	go hystersisloadmanagement.StartSystemMonitorAndSendAnalytics(&usage, &mu, &CompanySFUs, &CompanySFUsMutex)
 	// Initialize the logger
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
