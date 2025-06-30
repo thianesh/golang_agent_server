@@ -118,6 +118,7 @@ func insertAnalytics(companySFUs *map[string]*models.CompanySFU, companySFUsMute
 
 	companySFUsMutex.RLock()
 	for _, companySFU := range *companySFUs {
+		companySFU.CompanySFUsMutex.RLock()
 		for _, user := range companySFU.Users {
 			jsonData = append(jsonData, analyticsPayload{
 				CompanyID: companySFU.CompanyID,
@@ -126,6 +127,7 @@ func insertAnalytics(companySFUs *map[string]*models.CompanySFU, companySFUsMute
 				Type:      "user_data",
 			})
 		}
+		companySFU.CompanySFUsMutex.RUnlock()
 	}
 	companySFUsMutex.RUnlock()
 
