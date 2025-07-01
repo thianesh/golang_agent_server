@@ -132,7 +132,7 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 						single_connection.MemberTracks[user_id].PipeVideo = pipe_video
 						single_connection.MemberTracks[user_id].VideoPipeLock.Unlock()
 					}
-					single_connection.MemberLock.Unlock()						
+					single_connection.MemberLock.Unlock()
 					if trackExists {
 						company_sfu.CompanySFUsMutex.RLock()
 						user, ok := company_sfu.Users[models.UserId(user_id)]
@@ -426,6 +426,12 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 							if err != nil {
 								fmt.Println("Error removing video track:", err)
 							}
+						}
+						if user.MemberTracks[member_id].AudioForwardCancel != nil {
+							user.MemberTracks[member_id].AudioForwardCancel()
+						}
+						if user.MemberTracks[member_id].VideoForwardCancel != nil {
+							user.MemberTracks[member_id].VideoForwardCancel()
 						}
 						delete(user.MemberTracks, member_id)
 						user.MemberLock.Unlock()

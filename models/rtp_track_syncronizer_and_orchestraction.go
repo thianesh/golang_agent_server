@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -20,11 +21,21 @@ func Contains(slice []string, value string) bool {
 	return false
 }
 
-func Forward(buf <-chan *rtp.Packet, sender *webrtc.TrackLocalStaticRTP, tag string) {
-	for pkt := range buf {
-		// Always clone; sender rewrites headers in-place
-		if err := sender.WriteRTP(pkt); err != nil {
-			fmt.Printf("[%s] WriteRTP failed: %v", tag, err)
+func Forward(ctx context.Context, buf <-chan *rtp.Packet, sender *webrtc.TrackLocalStaticRTP, tag string) {
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("[" + tag + "] context cancelled")
+			return
+		case pkt, ok := <-buf:
+			if !ok {
+				fmt.Println("[" + tag + "] buffer closed")
+				return
+			}
+			if err := sender.WriteRTP(pkt); err != nil {
+				fmt.Printf("[%s] WriteRTP failed: %v\n", tag, err)
+				return
+			}
 		}
 	}
 }
@@ -385,7 +396,11 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 							track_exists = true
 							user.MemberLock.Lock()
 							user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer = make(chan *rtp.Packet, 256)
-							go Forward(user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
+							
+							ctx, cancel := context.WithCancel(context.Background())
+							user.MemberTracks[string(users_connction_check.UserId)].AudioForwardCancel = cancel
+							
+							go Forward(ctx, user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
 							user.MemberLock.Unlock()
 						}
 					}
@@ -395,8 +410,12 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 						fmt.Println("Added audio track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 						track_exists = true
 						user.MemberLock.Lock()
+						
+						ctx, cancel := context.WithCancel(context.Background())
+						user.MemberTracks[string(users_connction_check.UserId)].AudioForwardCancel = cancel
+						
 						user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer = make(chan *rtp.Packet, 256)
-						go Forward(user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
+						go Forward(ctx, user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
 						user.MemberLock.Unlock()
 					}
 				}
@@ -415,8 +434,12 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 							fmt.Println("Added video track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 							track_exists = true
 							user.MemberLock.Lock()
+
+							ctx, cancel := context.WithCancel(context.Background())
+							user.MemberTracks[string(users_connction_check.UserId)].VideoForwardCancel = cancel
+
 							user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer = make(chan *rtp.Packet, 1024)
-							go Forward(user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer, user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack, string(users_connction_check.UserId)+">> video")
+							go Forward(ctx, user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer, user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack, string(users_connction_check.UserId)+">> video")
 							user.MemberLock.Unlock()
 
 						}
@@ -427,8 +450,12 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 						fmt.Println("Added video track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 						track_exists = true
 						user.MemberLock.Lock()
+
+						ctx, cancel := context.WithCancel(context.Background())
+						user.MemberTracks[string(users_connction_check.UserId)].VideoForwardCancel = cancel
+
 						user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer = make(chan *rtp.Packet, 1024)
-						go Forward(user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer, user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack, string(users_connction_check.UserId)+">> video")
+						go Forward(ctx, user.MemberTracks[string(users_connction_check.UserId)].VideoBuffer, user.MemberTracks[string(users_connction_check.UserId)].VideoSenderTrack, string(users_connction_check.UserId)+">> video")
 						user.MemberLock.Unlock()
 					}
 				}

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"sync"
 
 	"github.com/pion/rtp"
@@ -26,6 +27,8 @@ type MemberOutputTrack struct {
 	PipeVideo        bool
 	AudioPipeLock    sync.Mutex
 	VideoPipeLock    sync.Mutex
+	AudioForwardCancel context.CancelFunc
+	VideoForwardCancel context.CancelFunc
 }
 
 type FullConnectionDetails struct {
