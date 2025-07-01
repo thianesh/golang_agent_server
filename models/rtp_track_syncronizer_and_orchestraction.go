@@ -94,14 +94,15 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					if memberTrack == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId)
 						company_sfu.RtpSyncNeeded = true
+						refresh_users()
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
 
 					if memberTrack.AudioTrack == nil {
 						fmt.Println("Audio track is nill for ", string(peer_connection.UserId))
-						refresh_users()
 						company_sfu.RtpSyncNeeded = true
+						refresh_users()
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
@@ -200,6 +201,7 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					if memberTrack == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId, "for user", user.Email, user.UserId)
 						company_sfu.RtpSyncNeeded = true
+						refresh_users()
 						// go sysc_user_tracks_and_renegotiate(company_sfu)
 						continue
 					}
