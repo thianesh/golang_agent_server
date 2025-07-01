@@ -2,22 +2,24 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 )
 
 type CompanySFU struct {
-	Users              map[UserId]*FullConnectionDetails
-	Rooms              map[RoomId]*Room
-	onlineStatusTicker chan struct{}
-	HeartBeatTicker    chan struct{}
-	MaxUserConnections int
-	MaxRooms           int
-	MaxUsers           int
-	CompanyID          string
-	RtpSyncNeeded      bool
-	Renegotiating      bool
-	CompanySFUsMutex   sync.RWMutex
+	Users                 map[UserId]*FullConnectionDetails
+	Rooms                 map[RoomId]*Room
+	onlineStatusTicker    chan struct{}
+	HeartBeatTicker       chan struct{}
+	MaxUserConnections    int
+	MaxRooms              int
+	MaxUsers              int
+	CompanyID             string
+	RtpSyncNeeded         bool
+	Renegotiating         bool
+	CompanySFUsMutex      sync.RWMutex
+	CompanySFUUsersRMLock sync.RWMutex
 }
 
 func NewCompanySFU() *CompanySFU {
@@ -82,16 +84,22 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 
 	type media_details map[string]string
 
+	sfu.CompanySFUsMutex.RLock()
+	all_users := sfu.Users
+	sfu.CompanySFUsMutex.RUnlock()
+
 	// i := 0
-	for _, user_full := range sfu.Users {
+	// sfu.CompanySFUsMutex.RLock()
+	// defer sfu.CompanySFUsMutex.RUnlock()
+
+	for _, user_full := range all_users {
 		// UserActiveList = append(UserActiveList, UserId(user_id))
 		// i++
 
 		if user_full.Died {
 			continue
 		}
-
-		for _, user := range sfu.Users {
+		for _, user := range all_users {
 
 			members_media_ids := make(map[UserId]media_details, userCount)
 
@@ -142,9 +150,15 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 
 			go func() {
 				if user.DataChannel != nil {
-					if err := user.DataChannel.Send(jsonBytes); err != nil {
-						user.Offline = true
-						user.OfflineSince = time.Now().Unix()
+					// if err := user.DataChannel.Send(jsonBytes); err != nil {
+					// 	user.Offline = true
+					// 	user.OfflineSince = time.Now().Unix()
+					// }
+					select {
+					case user.OutgoingDataChannel <- jsonBytes:
+						// queued
+					default:
+						fmt.Println("OutgoingDataChannel buffer full for", user.UserId, "- dropping online status messages")
 					}
 				}
 			}()

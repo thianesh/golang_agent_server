@@ -44,8 +44,13 @@ func SendInstantPLI(track *webrtc.TrackRemote, pc *webrtc.PeerConnection) {
 	}()
 }
 
-func Send_pli_to_company_sfu(sfu *CompanySFU){
-	for _, user := range sfu.Users {
+func Send_pli_to_company_sfu(sfu *CompanySFU) {
+
+	sfu.CompanySFUsMutex.RLock()
+	all_users := sfu.Users
+	sfu.CompanySFUsMutex.RUnlock()
+
+	for _, user := range all_users {
 		if user.Webrtc == nil {
 			continue
 		}
