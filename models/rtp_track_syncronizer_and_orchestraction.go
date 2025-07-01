@@ -46,11 +46,11 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 	all_users := company_sfu.Users
 	company_sfu.CompanySFUsMutex.RUnlock()
 
-	refresh_users := func() {
-		company_sfu.CompanySFUsMutex.RLock()
-		all_users = company_sfu.Users
-		company_sfu.CompanySFUsMutex.RUnlock()
-	}
+	// refresh_users := func() {
+	// 	company_sfu.CompanySFUsMutex.RLock()
+	// 	all_users = company_sfu.Users
+	// 	company_sfu.CompanySFUsMutex.RUnlock()
+	// }
 
 	peer_connection.Webrtc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		// fmt.Printf("Track has started, of type %d: %s \n", track.PayloadType(), track.Codec().MimeType)
@@ -71,6 +71,10 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					break
 				}
 
+				company_sfu.CompanySFUsMutex.RLock()
+				all_users = company_sfu.Users
+				company_sfu.CompanySFUsMutex.RUnlock()
+
 				for _, user := range all_users {
 
 					if user.UserId == peer_connection.UserId {
@@ -81,14 +85,16 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						continue
 					}
 
-					if all_users[user.UserId] == nil || all_users[user.UserId].Webrtc == nil {
+					all_users[user.UserId].FullConnectionDetailsRWLock.RLock()
+					if all_users[user.UserId] == nil || all_users[user.UserId].Webrtc == nil || all_users[user.UserId].Died || all_users[user.UserId].DataChannel == nil {
+						all_users[user.UserId].FullConnectionDetailsRWLock.RUnlock()
 						continue
 					}
+					all_users[user.UserId].FullConnectionDetailsRWLock.RUnlock()
 
 					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
 					if user.Webrtc.SignalingState() != webrtc.SignalingStateStable {
 						fmt.Println("Signaling state is not stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState())
-						refresh_users()
 						continue
 					}
 
@@ -104,17 +110,17 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					user.MemberLock.Unlock()
 					if memberTrack == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId)
+						company_sfu.RtpSyncNeededMutex.Lock()
 						company_sfu.RtpSyncNeeded = true
-						refresh_users()
-						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						company_sfu.RtpSyncNeededMutex.Unlock()
 						continue
 					}
 
 					if memberTrack.AudioTrack == nil {
 						fmt.Println("Audio track is nill for ", string(peer_connection.UserId))
+						company_sfu.RtpSyncNeededMutex.Lock()
 						company_sfu.RtpSyncNeeded = true
-						refresh_users()
-						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						company_sfu.RtpSyncNeededMutex.Unlock()
 						continue
 					}
 
@@ -174,6 +180,10 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 			for {
 				rtp, _, readErr := track.ReadRTP()
 
+				company_sfu.CompanySFUsMutex.RLock()
+				all_users = company_sfu.Users
+				company_sfu.CompanySFUsMutex.RUnlock()
+
 				if readErr != nil {
 					fmt.Println("Unable to read Video RTP")
 					break
@@ -189,13 +199,15 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 						continue
 					}
 
-					if all_users[user.UserId] == nil || all_users[user.UserId].Webrtc == nil {
+					all_users[user.UserId].FullConnectionDetailsRWLock.RLock()
+					if all_users[user.UserId] == nil || all_users[user.UserId].Webrtc == nil || all_users[user.UserId].Died || all_users[user.UserId].DataChannel == nil {
+						all_users[user.UserId].FullConnectionDetailsRWLock.RUnlock()
 						continue
 					}
+					all_users[user.UserId].FullConnectionDetailsRWLock.RUnlock()
 					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
 					if user.Webrtc.SignalingState() != webrtc.SignalingStateStable {
 						fmt.Println("Signaling state is not stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState())
-						refresh_users()
 						continue
 					}
 
@@ -211,16 +223,16 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					user.MemberLock.Unlock()
 					if memberTrack == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId, "for user", user.Email, user.UserId)
+						company_sfu.RtpSyncNeededMutex.Lock()
 						company_sfu.RtpSyncNeeded = true
-						refresh_users()
-						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						company_sfu.RtpSyncNeededMutex.Unlock()
 						continue
 					}
 					if memberTrack.VideoTrack == nil {
 						fmt.Println("Video track is nill for ", string(peer_connection.UserId), "for user", user.Email, user.UserId)
-						refresh_users()
+						company_sfu.RtpSyncNeededMutex.Lock()
 						company_sfu.RtpSyncNeeded = true
-						// go sysc_user_tracks_and_renegotiate(company_sfu)
+						company_sfu.RtpSyncNeededMutex.Unlock()
 						continue
 					}
 
@@ -335,16 +347,26 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 
 	fmt.Println("Entering sysc_user_tracks_and_renegotiate function")
 
-	if !company_sfu.RtpSyncNeeded || company_sfu.Renegotiating {
+	company_sfu.RtpSyncNeededMutex.Lock()
+	RtpSyncNeeded := company_sfu.RtpSyncNeeded
+	Renegotiating := company_sfu.Renegotiating
+	company_sfu.RtpSyncNeededMutex.Unlock()
+
+	if !RtpSyncNeeded || Renegotiating {
 		return
 	}
 
 	defer func() {
+		company_sfu.RtpSyncNeededMutex.Lock()
 		company_sfu.RtpSyncNeeded = false
 		company_sfu.Renegotiating = false
+		company_sfu.RtpSyncNeededMutex.Unlock()
 	}()
 
+	company_sfu.RtpSyncNeededMutex.Lock()
 	company_sfu.Renegotiating = true
+	company_sfu.RtpSyncNeededMutex.Unlock()
+
 	fmt.Println("Syncing user tracks and renegotiating...")
 
 	users_to_renegotiate := make([]*FullConnectionDetails, 0)
@@ -361,7 +383,11 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 
 	for _, user := range all_users {
 
-		if user.Died {
+		user.FullConnectionDetailsRWLock.RLock()
+		is_user_alive := user.Died
+		user.FullConnectionDetailsRWLock.RUnlock()
+
+		if is_user_alive {
 			continue
 		}
 
@@ -396,10 +422,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 							track_exists = true
 							user.MemberLock.Lock()
 							user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer = make(chan *rtp.Packet, 256)
-							
+
 							ctx, cancel := context.WithCancel(context.Background())
 							user.MemberTracks[string(users_connction_check.UserId)].AudioForwardCancel = cancel
-							
+
 							go Forward(ctx, user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
 							user.MemberLock.Unlock()
 						}
@@ -410,10 +436,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 						fmt.Println("Added audio track for", users_connction_check.Email, " to the user", user.Email, user.UserId)
 						track_exists = true
 						user.MemberLock.Lock()
-						
+
 						ctx, cancel := context.WithCancel(context.Background())
 						user.MemberTracks[string(users_connction_check.UserId)].AudioForwardCancel = cancel
-						
+
 						user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer = make(chan *rtp.Packet, 256)
 						go Forward(ctx, user.MemberTracks[string(users_connction_check.UserId)].AudioBuffer, user.MemberTracks[string(users_connction_check.UserId)].AudioSenderTrack, string(users_connction_check.UserId)+">> audio")
 						user.MemberLock.Unlock()

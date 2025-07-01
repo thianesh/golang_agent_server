@@ -16,6 +16,7 @@ type CompanySFU struct {
 	MaxRooms              int
 	MaxUsers              int
 	CompanyID             string
+	RtpSyncNeededMutex    sync.Mutex
 	RtpSyncNeeded         bool
 	Renegotiating         bool
 	CompanySFUsMutex      sync.RWMutex
@@ -64,7 +65,9 @@ func (sfu *CompanySFU) Heartbeat() {
 			}
 			// sysc_user_tracks_and_renegotiate(sfu)
 		} else {
+			user.FullConnectionDetailsRWLock.Lock()
 			user.Died = true
+			user.FullConnectionDetailsRWLock.Unlock()
 		}
 	}
 
