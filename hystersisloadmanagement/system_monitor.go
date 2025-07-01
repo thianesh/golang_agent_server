@@ -54,7 +54,7 @@ func getIntervalFromEnv() int {
 	intervalStr := os.Getenv("SYSTEM_MONITOR_INTERVAL")
 	interval, err := strconv.Atoi(intervalStr)
 	if err != nil || interval <= 0 {
-		return 15 // default
+		return 30 // default
 	}
 	return interval
 }

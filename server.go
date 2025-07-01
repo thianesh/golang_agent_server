@@ -10,10 +10,11 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"thianesh/web_server/hystersisloadmanagement"
 	mediaorchestration "thianesh/web_server/media_orchestration"
 	"thianesh/web_server/models"
 	"time"
-	"thianesh/web_server/hystersisloadmanagement"
+
 	"github.com/pion/webrtc/v4"
 	"github.com/rs/cors"
 )
@@ -238,6 +239,26 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	logger.Debug("All-Set nothing pending.")
 }
 
+func send_utility(w http.ResponseWriter, r *http.Request, usage *hystersisloadmanagement.SystemConsumption, mu *sync.RWMutex) {
+	// Example authentication handler
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		http.Error(w, "Authorization header missing", http.StatusUnauthorized)
+		return
+	}
+
+	mu.RLock()
+	res_payload := map[string]interface{}{
+		"cpu": usage.CPUPercent,
+		"ram": usage.RAMPercent,
+	}
+	mu.RUnlock()
+
+	if err := json.NewEncoder(w).Encode(res_payload); err != nil {
+		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
+	}
+}
+
 func add_track(peerConnection *models.FullConnectionDetails) {
 
 	WaitSignallingStable(peerConnection.Webrtc)
@@ -286,6 +307,9 @@ func main() {
 
 	mux.Handle("GET /", file_server)
 	mux.Handle("POST /start", http.HandlerFunc(auth_handler))
+	mux.Handle("GET /health-check", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		send_utility(w, r, &usage, &mu)
+	}))
 
 	fmt.Println("Server started on http://localhost:8080")
 
