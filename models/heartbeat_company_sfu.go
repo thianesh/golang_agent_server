@@ -50,7 +50,7 @@ func (sfu *CompanySFU) Heartbeat() {
 			if err := user.DataChannel.SendText("h"); err != nil {
 
 				if user.Offline {
-					if time.Now().Unix()-user.OfflineSince > 6 {
+					if time.Now().Unix()-user.OfflineSince > 20 {
 						// If the user is already offline and the heartbeat has failed for more than 3 seconds,
 						// we mark the user as dead.
 						user.Died = true
@@ -195,7 +195,7 @@ func (sfu *CompanySFU) StartOnlineStatusBroadcaster() {
 	sfu.onlineStatusTicker = make(chan struct{})
 
 	go func() {
-		ticker := time.NewTicker(6 * time.Second)
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 
 		for {

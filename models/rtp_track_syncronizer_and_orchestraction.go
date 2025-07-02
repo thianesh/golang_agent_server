@@ -21,12 +21,42 @@ func Contains(slice []string, value string) bool {
 	return false
 }
 
+var lastSent sync.Map // key = *webrtc.TrackLocalStaticRTP , value = time.Time
+
+func sendEmptyAudio(sender *webrtc.TrackLocalStaticRTP) {
+	// 3-byte Opus comfort-noise frame (RFC 6716 §3.1.2)
+	pkt := &rtp.Packet{
+		Header: rtp.Header{
+			Version: 2,
+			// PayloadType is overwritten by Pion when it binds, so 0 is fine.
+		},
+		Payload: []byte{0xF8, 0xFF, 0xFE},
+	}
+	_ = sender.WriteRTP(pkt)
+}
+
+func sendEmptyVideo(sender *webrtc.TrackLocalStaticRTP) {
+	pkt := &rtp.Packet{
+		Header: rtp.Header{
+			Version: 2,
+			Padding: true, // RFC 6263 keep-alive
+			// PayloadType is overwritten by Pion just like above.
+		},
+		Payload:     []byte{0x00}, // single padding byte
+		PaddingSize: 1,
+	}
+	_ = sender.WriteRTP(pkt)
+}
+
 func Forward(ctx context.Context, buf <-chan *rtp.Packet, sender *webrtc.TrackLocalStaticRTP, tag string) {
+	ticker := time.NewTicker(1 * time.Second) // how often we may inject keep-alive
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			fmt.Println("[" + tag + "] context cancelled")
 			return
+
 		case pkt, ok := <-buf:
 			if !ok {
 				fmt.Println("[" + tag + "] buffer closed")
@@ -36,9 +66,40 @@ func Forward(ctx context.Context, buf <-chan *rtp.Packet, sender *webrtc.TrackLo
 				fmt.Printf("[%s] WriteRTP failed: %v\n", tag, err)
 				return
 			}
+			lastSent.Store(sender, time.Now()) // remember last real packet time
+
+		case <-ticker.C:
+			if v, ok := lastSent.Load(sender); ok && time.Since(v.(time.Time)) < time.Second {
+				// we wrote something real in the last second → skip keep-alive
+				continue
+			}
+			if strings.Contains(tag, "audio") {
+				sendEmptyAudio(sender)
+			} else {
+				sendEmptyVideo(sender)
+			}
 		}
 	}
 }
+
+// func Forward(ctx context.Context, buf <-chan *rtp.Packet, sender *webrtc.TrackLocalStaticRTP, tag string) {
+// 	for {
+// 		select {
+// 		case <-ctx.Done():
+// 			fmt.Println("[" + tag + "] context cancelled")
+// 			return
+// 		case pkt, ok := <-buf:
+// 			if !ok {
+// 				fmt.Println("[" + tag + "] buffer closed")
+// 				return
+// 			}
+// 			if err := sender.WriteRTP(pkt); err != nil {
+// 				fmt.Printf("[%s] WriteRTP failed: %v\n", tag, err)
+// 				return
+// 			}
+// 		}
+// 	}
+// }
 
 func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU) {
 
