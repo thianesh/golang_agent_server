@@ -127,7 +127,10 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	UserConnectionsMutex.Lock()
 	if _, ok := UserConnections[parsed_user_data.User.ID]; ok {
 		logger.Debug(fmt.Sprintf("Existing connection found for %s, connection state: %t", UserConnections[parsed_user_data.User.ID].Email, UserConnections[parsed_user_data.User.ID].Died))
+
+		UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RLock()
 		if !UserConnections[parsed_user_data.User.ID].Died {
+			UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RUnlock()
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 
@@ -138,6 +141,7 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 			UserConnectionsMutex.Unlock()
 			return
 		}
+		UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RUnlock()
 	}
 	UserConnectionsMutex.Unlock()
 	// Add company SFU process to CompanuSFUs
@@ -172,6 +176,7 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	var conn *models.FullConnectionDetails
 	UserConnectionsMutex.Lock()
 	UserConnections[parsed_user_data.User.ID] = peer_connection
+	UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.Lock()
 
 	UserConnections[parsed_user_data.User.ID].OfferSDP = payload.SDP
 	UserConnections[parsed_user_data.User.ID].AnswerSDP = UserConnections[parsed_user_data.User.ID].Webrtc.LocalDescription().SDP
@@ -183,6 +188,8 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	UserConnections[parsed_user_data.User.ID].Email = parsed_user_data.User.Email
 	UserConnections[parsed_user_data.User.ID].CompanyId = parsed_user_data.CompanyID
 	UserConnections[parsed_user_data.User.ID].Rooms = []*models.Room{}
+	UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.Unlock()
+
 	conn = UserConnections[parsed_user_data.User.ID]
 	UserConnectionsMutex.Unlock()
 

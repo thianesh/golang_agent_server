@@ -54,7 +54,7 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 		})
 
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-			// fmt.Printf("Received message: %s\n", string(msg.Data))
+			fmt.Printf("Received message: %s\n", single_connection.Email, string(msg.Data))
 			payload := payload_struct{}
 			err := json.Unmarshal(msg.Data, &payload)
 
@@ -363,6 +363,85 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 		single_connection.DiedLock.Lock()
 		single_connection.Died = true
 		single_connection.DiedLock.Unlock()
+		single_connection.MemberLock.Lock()
+		single_connection.MemberTracks = map[string]*models.MemberOutputTrack{}
+		single_connection.MemberLock.Unlock()
+		company_sfu.SendOnlineStatus()
+
+		company_sfu.CompanySFUsMutex.Lock()
+		delete(company_sfu.Users, single_connection.UserId)
+		company_sfu.CompanySFUsMutex.Unlock()
+
+		// now I have to remove this member track from all the users.
+		company_sfu.CompanySFUsMutex.RLock()
+		for _, user := range company_sfu.Users {
+			user.MemberLock.Lock()
+			if user.MemberTracks == nil {
+				user.MemberLock.Unlock()
+				continue
+			}
+			removed := false
+			for member_id := range user.MemberTracks {
+				if member_id == string(single_connection.UserId) {
+					if user.MemberTracks[member_id].AudioTrack != nil {
+						user.MemberTracks[member_id].AudioTrack.Stop()
+
+						user.MemberTracks[member_id].AudioBufferClose.Lock()
+						if user.MemberTracks[member_id].AudioBuffer != nil {
+							close(user.MemberTracks[member_id].AudioBuffer)
+							user.MemberTracks[member_id].AudioBuffer = nil
+						}
+						user.MemberTracks[member_id].AudioBufferClose.Unlock()
+
+						err := user.Webrtc.RemoveTrack(user.MemberTracks[member_id].AudioTrack)
+						if err != nil {
+							fmt.Println("Error removing audio track:", err)
+						}
+					}
+					if user.MemberTracks[member_id].VideoTrack != nil {
+						user.MemberTracks[member_id].VideoTrack.Stop()
+
+						user.MemberTracks[member_id].VideoBufferClose.Lock()
+						if user.MemberTracks[member_id].VideoBuffer != nil {
+							close(user.MemberTracks[member_id].VideoBuffer)
+							user.MemberTracks[member_id].VideoBuffer = nil
+						}
+						user.MemberTracks[member_id].VideoBufferClose.Unlock()
+
+						err := user.Webrtc.RemoveTrack(user.MemberTracks[member_id].VideoTrack)
+						if err != nil {
+							fmt.Println("Error removing video track:", err)
+						}
+					}
+					if user.MemberTracks[member_id].AudioForwardCancel != nil {
+						user.MemberTracks[member_id].AudioForwardCancel()
+					}
+					if user.MemberTracks[member_id].VideoForwardCancel != nil {
+						user.MemberTracks[member_id].VideoForwardCancel()
+					}
+					delete(user.MemberTracks, member_id)
+					user.MemberLock.Unlock()
+
+					fmt.Println("Removed member track for user:", user.UserId, "member_id:", member_id)
+					fmt.Println(">>>>>>>>> Intiating removed re-negotiation <<<<<<<<")
+					if !user.Died && user.Webrtc != nil {
+						fmt.Println("User is alive in the SFU, initiating renegotiation.")
+						fmt.Println("Total tracks for user:", user.Webrtc.GetTransceivers())
+						fmt.Println("Sender tracks for user:", user.Webrtc.GetSenders())
+						fmt.Println("Receiver tracks for user:", user.Webrtc.GetReceivers())
+
+						go Renegotiate(user)
+					} else {
+						fmt.Println("User is dead or WebRTC is nil, skipping renegotiation.")
+					}
+					break
+				}
+				if !removed {
+					user.MemberLock.Unlock()
+				}
+			}
+		}
+		company_sfu.CompanySFUsMutex.RUnlock()
 	}
 
 	single_connection.Webrtc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
@@ -460,4 +539,92 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 	})
 
 	<-done // block until done is closed
+}
+
+
+func close_connection(single_connection *models.FullConnectionDetails, company_sfu *models.CompanySFU, closeDone func()) {
+	fmt.Println("Connection closed/disconnected. Exiting goroutine.")
+		closeDone()
+		single_connection.DiedLock.Lock()
+		single_connection.Died = true
+		single_connection.DiedLock.Unlock()
+		single_connection.MemberLock.Lock()
+		single_connection.MemberTracks = map[string]*models.MemberOutputTrack{}
+		single_connection.MemberLock.Unlock()
+		company_sfu.SendOnlineStatus()
+
+		company_sfu.CompanySFUsMutex.Lock()
+		delete(company_sfu.Users, single_connection.UserId)
+		company_sfu.CompanySFUsMutex.Unlock()
+
+		// now I have to remove this member track from all the users.
+		company_sfu.CompanySFUsMutex.RLock()
+		for _, user := range company_sfu.Users {
+			user.MemberLock.Lock()
+			if user.MemberTracks == nil {
+				user.MemberLock.Unlock()
+				continue
+			}
+			removed := false
+			for member_id := range user.MemberTracks {
+				if member_id == string(single_connection.UserId) {
+					if user.MemberTracks[member_id].AudioTrack != nil {
+						user.MemberTracks[member_id].AudioTrack.Stop()
+
+						user.MemberTracks[member_id].AudioBufferClose.Lock()
+						if user.MemberTracks[member_id].AudioBuffer != nil {
+							close(user.MemberTracks[member_id].AudioBuffer)
+							user.MemberTracks[member_id].AudioBuffer = nil
+						}
+						user.MemberTracks[member_id].AudioBufferClose.Unlock()
+
+						err := user.Webrtc.RemoveTrack(user.MemberTracks[member_id].AudioTrack)
+						if err != nil {
+							fmt.Println("Error removing audio track:", err)
+						}
+					}
+					if user.MemberTracks[member_id].VideoTrack != nil {
+						user.MemberTracks[member_id].VideoTrack.Stop()
+
+						user.MemberTracks[member_id].VideoBufferClose.Lock()
+						if user.MemberTracks[member_id].VideoBuffer != nil {
+							close(user.MemberTracks[member_id].VideoBuffer)
+							user.MemberTracks[member_id].VideoBuffer = nil
+						}
+						user.MemberTracks[member_id].VideoBufferClose.Unlock()
+
+						err := user.Webrtc.RemoveTrack(user.MemberTracks[member_id].VideoTrack)
+						if err != nil {
+							fmt.Println("Error removing video track:", err)
+						}
+					}
+					if user.MemberTracks[member_id].AudioForwardCancel != nil {
+						user.MemberTracks[member_id].AudioForwardCancel()
+					}
+					if user.MemberTracks[member_id].VideoForwardCancel != nil {
+						user.MemberTracks[member_id].VideoForwardCancel()
+					}
+					delete(user.MemberTracks, member_id)
+					user.MemberLock.Unlock()
+
+					fmt.Println("Removed member track for user:", user.UserId, "member_id:", member_id)
+					fmt.Println(">>>>>>>>> Intiating removed re-negotiation <<<<<<<<")
+					if !user.Died && user.Webrtc != nil {
+						fmt.Println("User is alive in the SFU, initiating renegotiation.")
+						fmt.Println("Total tracks for user:", user.Webrtc.GetTransceivers())
+						fmt.Println("Sender tracks for user:", user.Webrtc.GetSenders())
+						fmt.Println("Receiver tracks for user:", user.Webrtc.GetReceivers())
+
+						go Renegotiate(user)
+					} else {
+						fmt.Println("User is dead or WebRTC is nil, skipping renegotiation.")
+					}
+					break
+				}
+				if !removed {
+					user.MemberLock.Unlock()
+				}
+			}
+		}
+		company_sfu.CompanySFUsMutex.RUnlock()
 }
