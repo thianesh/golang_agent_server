@@ -29,6 +29,8 @@ type MemberOutputTrack struct {
 	VideoPipeLock      sync.Mutex
 	AudioForwardCancel context.CancelFunc
 	VideoForwardCancel context.CancelFunc
+	AudioTrackCancel   context.CancelFunc
+	VideoTrackCancel   context.CancelFunc
 }
 
 type FullConnectionDetails struct {

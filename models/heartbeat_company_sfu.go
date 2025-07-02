@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/pion/webrtc/v4"
 )
 
 type CompanySFU struct {
@@ -46,7 +48,7 @@ func (sfu *CompanySFU) Heartbeat() {
 		if user.Died {
 			continue
 		}
-		if user.Webrtc != nil && user.DataChannel != nil {
+		if user.Webrtc != nil && user.DataChannel != nil && user.DataChannel.ReadyState() == webrtc.DataChannelStateOpen {
 			if err := user.DataChannel.SendText("h"); err != nil {
 
 				if user.Offline {
@@ -152,6 +154,14 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 			}
 
 			go func() {
+
+				user.DiedLock.Lock()
+				if user.Died || (user.DataChannel != nil && user.DataChannel.ReadyState() != webrtc.DataChannelStateOpen) {
+					user.DiedLock.Unlock()
+					return
+				}
+				user.DiedLock.Unlock()
+
 				if user.DataChannel != nil {
 					// if err := user.DataChannel.Send(jsonBytes); err != nil {
 					// 	user.Offline = true
@@ -228,9 +238,13 @@ func (sfu *CompanySFU) StartHeartBeat() {
 }
 
 func (sfu *CompanySFU) start_instant_renegotiator() {
-	if !sfu.Renegotiating && sfu.RtpSyncNeeded {
-		sysc_user_tracks_and_renegotiate(sfu)
-	}
+	sysc_user_tracks_and_renegotiate(sfu)
+	// sfu.RtpSyncNeededMutex.Lock()
+	// if !sfu.Renegotiating && sfu.RtpSyncNeeded {
+	// 	sysc_user_tracks_and_renegotiate(sfu)
+	// 	sfu.RtpSyncNeededMutex.Unlock()
+	// }
+	// sfu.RtpSyncNeededMutex.Unlock()
 }
 
 func (sfu *CompanySFU) Start_instant_renegotiator_caller() {
