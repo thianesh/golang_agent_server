@@ -90,7 +90,10 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 	type media_details map[string]string
 
 	sfu.CompanySFUsMutex.RLock()
-	all_users := sfu.Users
+	all_users := map[UserId]*FullConnectionDetails{}
+	for key, value := range sfu.Users {
+		all_users[key] = value
+	}
 	sfu.CompanySFUsMutex.RUnlock()
 
 	// i := 0
@@ -110,6 +113,12 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 
 			user.MemberLock.Lock()
 			for member_id, member_track := range user.MemberTracks {
+				val, ok := all_users[UserId(member_id)]
+
+				if !ok || val == nil {
+					continue
+				}
+
 				audio_track_id := ""
 				video_track_id := ""
 				audio_stream_id := ""
@@ -122,6 +131,9 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 				if member_track.VideoTrack != nil {
 					video_track_id = member_track.VideoSenderTrack.ID()
 					video_stream_id = member_track.VideoSenderTrack.StreamID()
+				}
+				if all_users[UserId(member_id)].DataChannel != nil && all_users[UserId(member_id)].DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
+					continue
 				}
 				members_media_ids[UserId(member_id)] = media_details{
 					"audio":        audio_track_id,

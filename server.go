@@ -132,22 +132,24 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		logger.Debug(fmt.Sprintf("Existing connection found for %s, connection state: %t", UserConnections[parsed_user_data.User.ID].Email, UserConnections[parsed_user_data.User.ID].Died))
 
 		if _, ok := CompanySFUs[parsed_user_data.CompanyID]; ok {
+			CompanySFUs[parsed_user_data.CompanyID].CompanySFUUsersRMLock.RLock()
 			if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; ok {
 				UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RLock()
 				if !UserConnections[parsed_user_data.User.ID].Died {
 					UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RUnlock()
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusBadRequest)
-
+					
 					json.NewEncoder(w).Encode(map[string]string{
 						"error": "User connection already exists. Please exit that connection to connect here.",
 					})
-
+					
 					UserConnectionsMutex.Unlock()
 					return
 				}
 				UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RUnlock()
 			}
+			CompanySFUs[parsed_user_data.CompanyID].CompanySFUUsersRMLock.RUnlock()
 		}
 
 	}
