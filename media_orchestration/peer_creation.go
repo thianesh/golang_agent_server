@@ -9,23 +9,27 @@ import (
 	// "github.com/pion/webrtc/v4/pkg/media"
 )
 
-func CreateOffer() (*models.FullConnectionDetails, error) {
+func CreateOffer(
+	parsed_user_data *models.AuthResponse,
+	attach_ontrack_member_track_sync func(*models.FullConnectionDetails, *models.CompanySFU),
+	company_sfu *models.CompanySFU) (*models.FullConnectionDetails, error) {
+
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{
 		ICETransportPolicy: webrtc.ICETransportPolicyAll,
-		ICEServers:         []webrtc.ICEServer{
-			// {
-			// 	URLs:           []string{"turn:jo.vldo.in:3478?transport=udp"},
-			// 	Username:       "thianesh",
-			// 	Credential:     "kjroitshhinmaanni",
-			// 	CredentialType: webrtc.ICECredentialTypePassword,
-			// },
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs:           []string{"turn:jo.vldo.in:3478"},
+				Username:       "thianesh",
+				Credential:     "kjroitshhinmaanni",
+				CredentialType: webrtc.ICECredentialTypePassword,
+			},
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// // VP8 video track
+	/* -- video track --------------------------------------------------- */
 	// videoTrack, err := webrtc.NewTrackLocalStaticRTP(
 	// 	webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8},
 	// 	"video", "pion-video",
@@ -39,26 +43,58 @@ func CreateOffer() (*models.FullConnectionDetails, error) {
 	// }
 	// go drainRTCP(videoSender)
 
-	// Data-channel (optional)
-	dc, err := pc.CreateDataChannel("data", nil)
+	/* -- audio track --------------------------------------------------- */
+	// audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+	// 	webrtc.RTPCodecCapability{
+	// 		MimeType: webrtc.MimeTypeOpus,
+	// 	},
+	// 	"audio", "pion-audio",
+	// )
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// audioSender, err := pc.AddTrack(audioTrack)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// go drainRTCP(audioSender)
+
+	full_connection := &models.FullConnectionDetails{
+		Webrtc:              pc,
+		// VideoSender:         videoSender,
+		// AudioSender:         audioSender,
+		// VideoSenderTrack:    videoTrack,
+		// AudioSenderTrack:    audioTrack,
+		UserId:              models.UserId(parsed_user_data.User.ID),
+		CompanySFU:          company_sfu,
+		AudioRoomsMap:       make(map[string]bool),
+		VideoRoomsMap:       make(map[string]bool),
+		OutgoingDataChannel: make(chan []byte, 250),
+	}
+
+	full_connection.MemberLock.Lock()
+	full_connection.MemberTracks = map[string]*models.MemberOutputTrack{}
+	full_connection.MemberLock.Unlock()
+
+	attach_ontrack_member_track_sync(full_connection, company_sfu)
+
+	/* -- create offer -------------------------------------------------- */
+	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		return nil, err
 	}
 
-	// SDP offer
-	offer, _ := pc.CreateOffer(nil)
-	_ = pc.SetLocalDescription(offer)
+	if err = pc.SetLocalDescription(offer); err != nil {
+		return nil, err
+	}
+
 	<-webrtc.GatheringCompletePromise(pc)
 
-	return &models.FullConnectionDetails{
-		Webrtc: pc,
-		// VideoSender: videoSender,
-		DataChannel:   dc,
-		OfferSDP:      pc.LocalDescription().SDP,
-		AudioRoomsMap: make(map[string]bool),
-		VideoRoomsMap: make(map[string]bool),
-	}, nil
+	full_connection.OfferSDP = pc.LocalDescription().SDP
+
+	return full_connection, nil
 }
+
 
 func DrainRTCP(sender *webrtc.RTPSender) {
 	buf := make([]byte, 1500)

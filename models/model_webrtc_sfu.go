@@ -34,8 +34,9 @@ type MemberOutputTrack struct {
 }
 
 type FullConnectionDetails struct {
-	Webrtc      *webrtc.PeerConnection
-	DataChannel *webrtc.DataChannel
+	Webrtc        *webrtc.PeerConnection
+	DataChannel   *webrtc.DataChannel
+	OfferAccepted bool
 	// VideoSender *webrtc.RTPSender
 	// AudioSender *webrtc.RTPSender
 	// VideoSenderTrack *webrtc.TrackLocalStaticRTP
