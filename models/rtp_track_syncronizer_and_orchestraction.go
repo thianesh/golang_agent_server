@@ -347,7 +347,10 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 					// now need to chech if user is broadcasing to room and if this particular user is in that room send the media
 					peer_connection.VideoPipeLockRoom.RLock()
-					rooms := peer_connection.VideoRoomsMap
+					rooms := make(map[RoomId]bool)
+					for room_id, state := range peer_connection.VideoRoomsMap {
+						rooms[RoomId(room_id)] = state
+					}
 					peer_connection.VideoPipeLockRoom.RUnlock()
 
 					for room_id, state := range rooms {
@@ -624,7 +627,7 @@ func AddAudioTrack(user *FullConnectionDetails, company_sfu *CompanySFU, users_c
 	if company_sfu.Users[users_connction_check.UserId].Webrtc.ConnectionState() != webrtc.PeerConnectionStateConnected {
 		company_sfu.CompanySFUUsersRMLock.RUnlock()
 		return errors.New("user is not connected"), false
-	}	
+	}
 	company_sfu.CompanySFUUsersRMLock.RUnlock()
 
 	go func() {

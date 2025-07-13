@@ -489,10 +489,10 @@ func close_connection(single_connection *models.FullConnectionDetails, company_s
 
 func cancel_all(member_track *models.MemberOutputTrack) {
 
-	member_track.AudioForwardCancel()
-	member_track.VideoForwardCancel()
-	member_track.VideoTrackCancel()
-	member_track.AudioTrackCancel()
+	// member_track.AudioForwardCancel()
+	// member_track.VideoForwardCancel()
+	// member_track.VideoTrackCancel()
+	// member_track.AudioTrackCancel()
 
 	if member_track.AudioForwardCancel != nil {
 		member_track.AudioForwardCancel()

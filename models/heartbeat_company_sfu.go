@@ -95,6 +95,7 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 		all_users[key] = value
 	}
 	sfu.CompanySFUsMutex.RUnlock()
+	fmt.Println("Sending online status")
 
 	// i := 0
 	// sfu.CompanySFUsMutex.RLock()
@@ -103,8 +104,11 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 	for _, user_full := range all_users {
 		// UserActiveList = append(UserActiveList, UserId(user_id))
 		// i++
-
-		if user_full.Died {
+		user_full.DiedLock.Lock()
+		user_full_alive := user_full.Died
+		user_full.DiedLock.Unlock()
+		
+		if user_full_alive{
 			continue
 		}
 		for _, user := range all_users {
@@ -112,7 +116,9 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 			members_media_ids := make(map[UserId]media_details, userCount)
 
 			user.MemberLock.Lock()
-			for member_id, member_track := range user.MemberTracks {
+			memberTracks := user.MemberTracks
+			user.MemberLock.Unlock()
+			for member_id, member_track := range memberTracks {
 				val, ok := all_users[UserId(member_id)]
 
 				if !ok || val == nil {
@@ -142,7 +148,6 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 					"video_stream": video_stream_id,
 				}
 			}
-			user.MemberLock.Unlock()
 
 			members_media_ids[user.UserId] = media_details{
 				"audio":        "",
@@ -168,17 +173,14 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 			go func() {
 
 				user.DiedLock.Lock()
-				if user.Died || (user.DataChannel != nil && user.DataChannel.ReadyState() != webrtc.DataChannelStateOpen) {
-					user.DiedLock.Unlock()
+				user_died := user.Died
+				user.DiedLock.Unlock()
+				if user_died || (user.DataChannel != nil && user.DataChannel.ReadyState() != webrtc.DataChannelStateOpen) {
+					fmt.Println("Not able to send data in Datachannel either died or not ready, for ", user.Email)
 					return
 				}
-				user.DiedLock.Unlock()
 
 				if user.DataChannel != nil {
-					// if err := user.DataChannel.Send(jsonBytes); err != nil {
-					// 	user.Offline = true
-					// 	user.OfflineSince = time.Now().Unix()
-					// }
 					select {
 					case user.OutgoingDataChannel <- jsonBytes:
 						// queued
