@@ -56,6 +56,7 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 			fmt.Println("Data channel open from browser")
 			dc.SendText("Hello from Pion")
 			single_connection.OnDataChannelBroadcaster(single_connection)
+			company_sfu.SendOnlineStatus()
 		})
 
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
