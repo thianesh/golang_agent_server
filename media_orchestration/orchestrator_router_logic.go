@@ -219,13 +219,17 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 				sent := map[models.UserId]bool{}
 				company_sfu.CompanySFUsMutex.RLock()
 				for room_id := range broadcastMap {
+					company_sfu.CompanySFUsMutex.RLock()
 					room := company_sfu.Rooms[room_id]
+					company_sfu.CompanySFUsMutex.RUnlock()
 					for _, room_member_id := range *room.AccessList {
 						uid := models.UserId(room_member_id)
 						if sent[uid] {
 							continue
 						}
+						company_sfu.CompanySFUsMutex.RLock()
 						user, ok := company_sfu.Users[uid]
+						company_sfu.CompanySFUsMutex.RUnlock()
 						if !ok || user.DataChannel == nil {
 							continue
 						}
@@ -289,13 +293,17 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 				sent := map[models.UserId]bool{}
 				company_sfu.CompanySFUsMutex.RLock()
 				for room_id := range broadcastMap {
+					company_sfu.CompanySFUsMutex.RLock()
 					room := company_sfu.Rooms[room_id]
+					company_sfu.CompanySFUsMutex.RUnlock()
 					for _, room_member_id := range *room.AccessList {
 						uid := models.UserId(room_member_id)
 						if sent[uid] {
 							continue
 						}
+						company_sfu.CompanySFUsMutex.RLock()
 						user, ok := company_sfu.Users[uid]
+						company_sfu.CompanySFUsMutex.RUnlock()
 						if !ok || user.DataChannel == nil {
 							continue
 						}
@@ -388,7 +396,6 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 	})
 
 	<-done
-}
 
 func close_connection(single_connection *models.FullConnectionDetails, company_sfu *models.CompanySFU) {
 	fmt.Println("Connection closed/disconnected. Exiting goroutine.")
@@ -482,6 +489,7 @@ func close_connection(single_connection *models.FullConnectionDetails, company_s
 					}
 					break
 				}
+				company_sfu.CompanySFUsMutex.RUnlock()
 			}
 		}()
 	}

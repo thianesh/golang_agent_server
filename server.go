@@ -316,7 +316,8 @@ func main() {
 	fmt.Println("Server started on http://localhost:8080")
 
 	handler := cors.AllowAll().Handler(mux)
-	http.ListenAndServe(":8080", handler)
+	err := http.ListenAndServe(":8080", handler)
+	fmt.Println(err)
 }
 
 // EncodeToBase64 encodes a string (like SDP) to base64

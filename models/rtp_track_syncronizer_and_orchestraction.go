@@ -154,7 +154,6 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 				company_sfu.CompanySFUsMutex.RUnlock()
 
 				for _, user := range all_users {
-
 					if user.UserId == peer_connection.UserId {
 						continue
 					}
