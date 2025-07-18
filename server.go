@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
-
 	"github.com/rs/cors"
 )
 
@@ -114,11 +113,13 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 
 	logger.Debug("Response from target server", "data", parsed_user_data)
 	// Optional: Write the response back to the original client
-	w.WriteHeader(resp.StatusCode)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
 
 	// Now we have the SDP and user details, we can accept the connection
 	sdp, err := DecodeFromBase64(payload.SDP)
+	logger.Debug("Response from target server", "121", parsed_user_data.User.Email)
+
 	if err != nil {
 		http.Error(w, "Failed to decode SDP", http.StatusInternalServerError)
 		log.Println("SDP decode error:", err)
@@ -126,22 +127,36 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	UserConnectionsMutex.Lock()
+	logger.Debug("Response from target server", "130", parsed_user_data.User.Email)
 	if _, ok := UserConnections[parsed_user_data.User.ID]; ok {
 		logger.Debug(fmt.Sprintf("Existing connection found for %s, connection state: %t", UserConnections[parsed_user_data.User.ID].Email, UserConnections[parsed_user_data.User.ID].Died))
-		if !UserConnections[parsed_user_data.User.ID].Died {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
 
-			json.NewEncoder(w).Encode(map[string]string{
-				"error": "User connection already exists. Please exit that connection to connect here.",
-			})
-
-			UserConnectionsMutex.Unlock()
-			return
+		if _, ok := CompanySFUs[parsed_user_data.CompanyID]; ok {
+			CompanySFUs[parsed_user_data.CompanyID].CompanySFUUsersRMLock.RLock()
+			if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; ok {
+				UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RLock()
+				if !UserConnections[parsed_user_data.User.ID].Died {
+					UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RUnlock()
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					
+					json.NewEncoder(w).Encode(map[string]string{
+						"error": "User connection already exists. Please exit that connection to connect here.",
+					})
+					
+					UserConnectionsMutex.Unlock()
+					return
+				}
+				UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RUnlock()
+			}
+			CompanySFUs[parsed_user_data.CompanyID].CompanySFUUsersRMLock.RUnlock()
 		}
+
 	}
 	UserConnectionsMutex.Unlock()
 	// Add company SFU process to CompanuSFUs
+
+	logger.Debug("Response from target server", "149", parsed_user_data.User.Email)
 	CompanySFUsMutex.Lock()
 
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID]; !ok {
@@ -157,6 +172,7 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 
 	CompanySFUsMutex.Unlock()
 
+	logger.Debug("Response from target server", "165", parsed_user_data.User.Email)
 	// accepting the offered SDP
 	peer_connection, err := mediaorchestration.CreateAnswer(
 		sdp,
@@ -170,7 +186,12 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Println("Answer created successfully", parsed_user_data.User.Email)
+
+	var conn *models.FullConnectionDetails
+	UserConnectionsMutex.Lock()
 	UserConnections[parsed_user_data.User.ID] = peer_connection
+	UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.Lock()
 
 	UserConnections[parsed_user_data.User.ID].OfferSDP = payload.SDP
 	UserConnections[parsed_user_data.User.ID].AnswerSDP = UserConnections[parsed_user_data.User.ID].Webrtc.LocalDescription().SDP
@@ -182,6 +203,10 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	UserConnections[parsed_user_data.User.ID].Email = parsed_user_data.User.Email
 	UserConnections[parsed_user_data.User.ID].CompanyId = parsed_user_data.CompanyID
 	UserConnections[parsed_user_data.User.ID].Rooms = []*models.Room{}
+	UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.Unlock()
+
+	conn = UserConnections[parsed_user_data.User.ID]
+	UserConnectionsMutex.Unlock()
 
 	for _, room := range parsed_user_data.Rooms {
 		CompanySFUsMutex.Lock()
@@ -191,16 +216,20 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		CompanySFUsMutex.Unlock()
 	}
 	// start all webrtc processes
-	go mediaorchestration.SingleOrchestrator(UserConnections[parsed_user_data.User.ID], CompanySFUs[parsed_user_data.CompanyID])
+	go mediaorchestration.SingleOrchestrator(conn, CompanySFUs[parsed_user_data.CompanyID], &UserConnections, &UserConnectionsMutex)
+	log.Println("Started single orchestrator for user : ", parsed_user_data.User.Email)
 
 	//setup renegotiation
-	UserConnections[parsed_user_data.User.ID].OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
+	UserConnectionsMutex.Lock()
+	conn.OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
 		logger.Debug("Data Channel added! adding negotiator.")
 
 		// starting data sending routine
 		go func(conn *models.FullConnectionDetails) {
+			conn.FullConnectionDetailsRWLock.RLock()
+			defer conn.FullConnectionDetailsRWLock.RUnlock()
 			for msg := range conn.OutgoingDataChannel {
-				if conn.DataChannel != nil {
+				if conn.DataChannel != nil && conn.DataChannel.ReadyState() == webrtc.DataChannelStateOpen {
 					err := conn.DataChannel.Send(msg)
 					if err != nil {
 						fmt.Println("Failed to send via datachannel:", err)
@@ -212,15 +241,20 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		fcd.RenegotiateMutex = sync.Mutex{}
 		mediaorchestration.Initialize_renegotiation(fcd)
 	}
+	UserConnectionsMutex.Unlock()
+	log.Println("Added data channel onDatachannel : ", parsed_user_data.User.Email)
 
+	CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Lock()
 	if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; !ok {
-		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = UserConnections[parsed_user_data.User.ID]
+		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = conn
 	}
+	CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Unlock()
 
 	res_payload := map[string]interface{}{
-		"SDP":    EncodeToBase64(UserConnections[parsed_user_data.User.ID].AnswerSDP),
+		"SDP":    EncodeToBase64(conn.AnswerSDP),
 		"status": "success",
 	}
+	log.Println("Sending Answer SDP to user ", parsed_user_data.User.Email)
 
 	if err := json.NewEncoder(w).Encode(res_payload); err != nil {
 		http.Error(w, "Failed to marshal response", http.StatusInternalServerError)
@@ -229,7 +263,7 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	// testing re-negotiation
 	// go add_track(UserConnections[parsed_user_data.User.ID])
 
-	logger.Debug("All-Set nothing pending.")
+	fmt.Println("All-Set nothing pending.", parsed_user_data.User.Email)
 }
 
 func send_utility(w http.ResponseWriter, r *http.Request, usage *hystersisloadmanagement.SystemConsumption, mu *sync.RWMutex) {
@@ -252,31 +286,6 @@ func send_utility(w http.ResponseWriter, r *http.Request, usage *hystersisloadma
 	}
 }
 
-func add_track(peerConnection *models.FullConnectionDetails) {
-
-	WaitSignallingStable(peerConnection.Webrtc)
-
-	time.Sleep(30 * time.Second) // simulate “later”
-
-	outputTrack, _ := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8}, "video-2", "stream-video-id",
-	)
-
-	rtpSender, _ := peerConnection.Webrtc.AddTrack(outputTrack)
-
-	go func() {
-		rtcpBuf := make([]byte, 1500)
-		for {
-			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
-				return
-			}
-		}
-	}()
-
-	log.Println("Added 2nd track → renegotiation should start")
-	mediaorchestration.Renegotiate(peerConnection)
-}
-
 func WaitSignallingStable(pc *webrtc.PeerConnection) {
 	for pc.SignalingState() != webrtc.SignalingStateStable {
 		time.Sleep(1 * time.Millisecond)
@@ -289,7 +298,6 @@ var mu sync.RWMutex
 func main() {
 
 	go hystersisloadmanagement.StartSystemMonitorAndSendAnalytics(&usage, &mu, &CompanySFUs, &CompanySFUsMutex)
-
 	// Initialize the logger
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,

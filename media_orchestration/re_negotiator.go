@@ -20,7 +20,7 @@ func Initialize_renegotiation(single_connection *models.FullConnectionDetails) {
 			}
 		}()
 
-		fmt.Println("Re-Negotiation initiated wihout wait group")
+		fmt.Println("Re-Negotiation initiated wihout wait group", single_connection.Email)
 		offer, _ := single_connection.Webrtc.CreateOffer(nil) // plain renegotiation; ICE stays same
 		_ = single_connection.Webrtc.SetLocalDescription(offer)
 		<-webrtc.GatheringCompletePromise(single_connection.Webrtc) // wait for all ICE candidates
@@ -31,7 +31,7 @@ func Initialize_renegotiation(single_connection *models.FullConnectionDetails) {
 		}
 
 		b, _ := json.Marshal(payload)
-		if single_connection.DataChannel != nil {
+		if single_connection.DataChannel != nil && single_connection.DataChannel.ReadyState() == webrtc.DataChannelStateOpen {
 			fmt.Println("Sending offer to UserId", single_connection.UserId)
 			single_connection.DataChannel.Send(b)
 		} else {
@@ -61,7 +61,7 @@ func Renegotiate(single_connection *models.FullConnectionDetails) {
 			}
 		}()
 
-		fmt.Println("Re-Negotiation initiated media Orchestration > Renegotiate")
+		fmt.Println("Re-Negotiation initiated media Orchestration > Renegotiate", single_connection.Email)
 		offer, _ := single_connection.Webrtc.CreateOffer(nil) // plain renegotiation; ICE stays same
 		_ = single_connection.Webrtc.SetLocalDescription(offer)
 		<-webrtc.GatheringCompletePromise(single_connection.Webrtc) // wait for all ICE candidates
@@ -72,7 +72,7 @@ func Renegotiate(single_connection *models.FullConnectionDetails) {
 		}
 
 		b, _ := json.Marshal(payload)
-		if single_connection.DataChannel != nil {
+		if single_connection.DataChannel != nil && single_connection.DataChannel.ReadyState() == webrtc.DataChannelStateOpen {
 			single_connection.DataChannel.Send(b)
 		} else {
 			fmt.Println("No data channel to re-negotiate!")

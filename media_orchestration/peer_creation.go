@@ -12,7 +12,7 @@ import (
 func CreateOffer() (*models.FullConnectionDetails, error) {
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{
 		ICETransportPolicy: webrtc.ICETransportPolicyAll,
-		ICEServers: []webrtc.ICEServer{
+		ICEServers:         []webrtc.ICEServer{
 			// {
 			// 	URLs:           []string{"turn:jo.vldo.in:3478?transport=udp"},
 			// 	Username:       "thianesh",
@@ -154,12 +154,15 @@ func CreateAnswer(
 		// AudioSenderTrack: audioTrack,
 		OfferSDP:            remoteOfferSDP,
 		UserId:              models.UserId(parsed_user_data.User.ID),
-		MemberTracks:        map[string]*models.MemberOutputTrack{},
 		CompanySFU:          company_sfu,
 		AudioRoomsMap:       make(map[string]bool),
 		VideoRoomsMap:       make(map[string]bool),
 		OutgoingDataChannel: make(chan []byte, 250),
 	}
+
+	full_connection.MemberLock.Lock()
+	full_connection.MemberTracks = map[string]*models.MemberOutputTrack{}
+	full_connection.MemberLock.Unlock()
 
 	attach_ontrack_member_track_sync(full_connection, company_sfu)
 

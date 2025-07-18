@@ -2,22 +2,27 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
+
+	"github.com/pion/webrtc/v4"
 )
 
 type CompanySFU struct {
-	Users              map[UserId]*FullConnectionDetails
-	Rooms              map[RoomId]*Room
-	onlineStatusTicker chan struct{}
-	HeartBeatTicker    chan struct{}
-	MaxUserConnections int
-	MaxRooms           int
-	MaxUsers           int
-	CompanyID          string
-	RtpSyncNeeded      bool
-	Renegotiating      bool
-	CompanySFUsMutex   sync.RWMutex
+	Users                 map[UserId]*FullConnectionDetails
+	Rooms                 map[RoomId]*Room
+	onlineStatusTicker    chan struct{}
+	HeartBeatTicker       chan struct{}
+	MaxUserConnections    int
+	MaxRooms              int
+	MaxUsers              int
+	CompanyID             string
+	RtpSyncNeededMutex    sync.Mutex
+	RtpSyncNeeded         bool
+	Renegotiating         bool
+	CompanySFUsMutex      sync.RWMutex
+	CompanySFUUsersRMLock sync.RWMutex
 }
 
 func NewCompanySFU() *CompanySFU {
@@ -34,8 +39,8 @@ func NewCompanySFU() *CompanySFU {
 
 func (sfu *CompanySFU) RemoveUser(userId UserId) {
 	sfu.CompanySFUsMutex.Lock()
-	defer sfu.CompanySFUsMutex.Unlock()
 	delete(sfu.Users, userId)
+	sfu.CompanySFUsMutex.Unlock()
 }
 
 func (sfu *CompanySFU) Heartbeat() {
@@ -44,11 +49,11 @@ func (sfu *CompanySFU) Heartbeat() {
 		if user.Died {
 			continue
 		}
-		if user.Webrtc != nil && user.DataChannel != nil {
+		if user.Webrtc != nil && user.DataChannel != nil && user.DataChannel.ReadyState() == webrtc.DataChannelStateOpen {
 			if err := user.DataChannel.SendText("h"); err != nil {
 
 				if user.Offline {
-					if time.Now().Unix()-user.OfflineSince > 6 {
+					if time.Now().Unix()-user.OfflineSince > 20 {
 						// If the user is already offline and the heartbeat has failed for more than 3 seconds,
 						// we mark the user as dead.
 						user.Died = true
@@ -63,7 +68,9 @@ func (sfu *CompanySFU) Heartbeat() {
 			}
 			// sysc_user_tracks_and_renegotiate(sfu)
 		} else {
+			user.FullConnectionDetailsRWLock.Lock()
 			user.Died = true
+			user.FullConnectionDetailsRWLock.Unlock()
 		}
 	}
 
@@ -88,20 +95,42 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 
 	type media_details map[string]string
 
+	sfu.CompanySFUsMutex.RLock()
+	all_users := map[UserId]*FullConnectionDetails{}
+	for key, value := range sfu.Users {
+		all_users[key] = value
+	}
+	sfu.CompanySFUsMutex.RUnlock()
+	fmt.Println("Sending online status")
+
 	// i := 0
-	for _, user_full := range sfu.Users {
+	// sfu.CompanySFUsMutex.RLock()
+	// defer sfu.CompanySFUsMutex.RUnlock()
+
+	for _, user_full := range all_users {
 		// UserActiveList = append(UserActiveList, UserId(user_id))
 		// i++
-
-		if user_full.Died {
+		user_full.DiedLock.Lock()
+		user_full_alive := user_full.Died
+		user_full.DiedLock.Unlock()
+		
+		if user_full_alive{
 			continue
 		}
-
-		for _, user := range sfu.Users {
+		for _, user := range all_users {
 
 			members_media_ids := make(map[UserId]media_details, userCount)
 
-			for member_id, member_track := range user.MemberTracks {
+			user.MemberLock.Lock()
+			memberTracks := user.MemberTracks
+			user.MemberLock.Unlock()
+			for member_id, member_track := range memberTracks {
+				val, ok := all_users[UserId(member_id)]
+
+				if !ok || val == nil {
+					continue
+				}
+
 				audio_track_id := ""
 				video_track_id := ""
 				audio_stream_id := ""
@@ -114,6 +143,9 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 				if member_track.VideoTrack != nil {
 					video_track_id = member_track.VideoSenderTrack.ID()
 					video_stream_id = member_track.VideoSenderTrack.StreamID()
+				}
+				if all_users[UserId(member_id)].DataChannel != nil && all_users[UserId(member_id)].DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
+					continue
 				}
 				members_media_ids[UserId(member_id)] = media_details{
 					"audio":        audio_track_id,
@@ -145,10 +177,21 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 			}
 
 			go func() {
+
+				user.DiedLock.Lock()
+				user_died := user.Died
+				user.DiedLock.Unlock()
+				if user_died || (user.DataChannel != nil && user.DataChannel.ReadyState() != webrtc.DataChannelStateOpen) {
+					fmt.Println("Not able to send data in Datachannel either died or not ready, for ", user.Email)
+					return
+				}
+
 				if user.DataChannel != nil {
-					if err := user.DataChannel.Send(jsonBytes); err != nil {
-						user.Offline = true
-						user.OfflineSince = time.Now().Unix()
+					select {
+					case user.OutgoingDataChannel <- jsonBytes:
+						// queued
+					default:
+						fmt.Println("OutgoingDataChannel buffer full for", user.UserId, "- dropping online status messages")
 					}
 				}
 			}()
@@ -185,7 +228,7 @@ func (sfu *CompanySFU) StartOnlineStatusBroadcaster() {
 	sfu.onlineStatusTicker = make(chan struct{})
 
 	go func() {
-		ticker := time.NewTicker(6 * time.Second)
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 
 		for {
@@ -218,9 +261,13 @@ func (sfu *CompanySFU) StartHeartBeat() {
 }
 
 func (sfu *CompanySFU) start_instant_renegotiator() {
-	if !sfu.Renegotiating && sfu.RtpSyncNeeded {
-		sysc_user_tracks_and_renegotiate(sfu)
-	}
+	sysc_user_tracks_and_renegotiate(sfu)
+	// sfu.RtpSyncNeededMutex.Lock()
+	// if !sfu.Renegotiating && sfu.RtpSyncNeeded {
+	// 	sysc_user_tracks_and_renegotiate(sfu)
+	// 	sfu.RtpSyncNeededMutex.Unlock()
+	// }
+	// sfu.RtpSyncNeededMutex.Unlock()
 }
 
 func (sfu *CompanySFU) Start_instant_renegotiator_caller() {
