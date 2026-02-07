@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/webrtc/v4"
+	gowebrtc "github.com/pion/webrtc/v4"
 )
 
 type CompanySFU struct {
@@ -44,42 +44,81 @@ func (sfu *CompanySFU) RemoveUser(userId UserId) {
 }
 
 func (sfu *CompanySFU) Heartbeat() {
-	for _, user := range sfu.Users {
-		if user.Died {
+	sfu.CompanySFUsMutex.RLock()
+	usersCopy := make(map[UserId]*FullConnectionDetails)
+	for k, v := range sfu.Users {
+		usersCopy[k] = v
+	}
+	sfu.CompanySFUsMutex.RUnlock()
+
+	deadUsers := []UserId{}
+
+	for userId, user := range usersCopy {
+		user.DiedLock.Lock()
+		isDead := user.Died
+		user.DiedLock.Unlock()
+
+		if isDead {
+			deadUsers = append(deadUsers, userId)
 			continue
 		}
-		if user.Webrtc != nil && user.DataChannel != nil && user.DataChannel.ReadyState() == webrtc.DataChannelStateOpen {
-			if err := user.DataChannel.SendText("h"); err != nil {
 
-				if user.Offline {
-					if time.Now().Unix()-user.OfflineSince > 20 {
-						// If the user is already offline and the heartbeat has failed for more than 3 seconds,
-						// we mark the user as dead.
-						user.Died = true
-					}
-				}
+		user.FullConnectionDetailsRWLock.RLock()
+		webrtcConn := user.Webrtc
+		dc := user.DataChannel
+		user.FullConnectionDetailsRWLock.RUnlock()
 
-				// If we can't send a heartbeat, we assume the connection is dead
-				user.Offline = true
-				user.OfflineSince = time.Now().Unix()
-
-				continue
-			}
-			// sysc_user_tracks_and_renegotiate(sfu)
-		} else {
+		// Check if WebRTC connection is nil or closed
+		if webrtcConn == nil {
 			user.FullConnectionDetailsRWLock.Lock()
 			user.Died = true
 			user.FullConnectionDetailsRWLock.Unlock()
-		}
-	}
-
-	// remove dead users
-	for userId, user := range sfu.Users {
-		if user.Died {
-			user.Webrtc.Close()
-			sfu.RemoveUser(userId)
+			deadUsers = append(deadUsers, userId)
 			continue
 		}
+
+		// If DataChannel isn't ready yet, skip this user - they're still connecting
+		// Don't mark them as dead, just skip the heartbeat for now
+		if dc == nil || dc.ReadyState() != gowebrtc.DataChannelStateOpen {
+			// User is still setting up, skip heartbeat but don't kill them
+			continue
+		}
+
+		// DataChannel is open, try to send heartbeat
+		if err := dc.SendText("h"); err != nil {
+			user.FullConnectionDetailsRWLock.Lock()
+			if user.Offline {
+				if time.Now().Unix()-user.OfflineSince > 20 {
+					// If the user is already offline and the heartbeat has failed for more than 20 seconds,
+					// we mark the user as dead.
+					user.Died = true
+					deadUsers = append(deadUsers, userId)
+				}
+			} else {
+				// If we can't send a heartbeat, we assume the connection is offline
+				user.Offline = true
+				user.OfflineSince = time.Now().Unix()
+			}
+			user.FullConnectionDetailsRWLock.Unlock()
+			continue
+		}
+
+		// Heartbeat succeeded, mark user as online if they were offline
+		user.FullConnectionDetailsRWLock.Lock()
+		if user.Offline {
+			user.Offline = false
+			user.OfflineSince = 0
+		}
+		user.FullConnectionDetailsRWLock.Unlock()
+	}
+
+	// remove dead users (outside of iteration)
+	for _, userId := range deadUsers {
+		user, ok := usersCopy[userId]
+		if ok && user.Webrtc != nil {
+			user.Webrtc.Close()
+		}
+		sfu.RemoveUser(userId)
 	}
 }
 
@@ -105,10 +144,10 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 		// UserActiveList = append(UserActiveList, UserId(user_id))
 		// i++
 		user_full.DiedLock.Lock()
-		user_full_alive := user_full.Died
+		user_full_dead := user_full.Died
 		user_full.DiedLock.Unlock()
-		
-		if user_full_alive{
+
+		if user_full_dead {
 			continue
 		}
 		for _, user := range all_users {
@@ -125,6 +164,13 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 					continue
 				}
 
+				val.DiedLock.Lock()
+				memberDead := val.Died
+				val.DiedLock.Unlock()
+				if memberDead {
+					continue
+				}
+
 				audio_track_id := ""
 				video_track_id := ""
 				audio_stream_id := ""
@@ -138,7 +184,7 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 					video_track_id = member_track.VideoSenderTrack.ID()
 					video_stream_id = member_track.VideoSenderTrack.StreamID()
 				}
-				if all_users[UserId(member_id)].DataChannel != nil && all_users[UserId(member_id)].DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
+				if all_users[UserId(member_id)].DataChannel != nil && all_users[UserId(member_id)].DataChannel.ReadyState() != gowebrtc.DataChannelStateOpen {
 					continue
 				}
 				members_media_ids[UserId(member_id)] = media_details{
@@ -175,7 +221,7 @@ func (sfu *CompanySFU) SendOnlineStatus() {
 				user.DiedLock.Lock()
 				user_died := user.Died
 				user.DiedLock.Unlock()
-				if user_died || (user.DataChannel != nil && user.DataChannel.ReadyState() != webrtc.DataChannelStateOpen) {
+				if user_died || (user.DataChannel != nil && user.DataChannel.ReadyState() != gowebrtc.DataChannelStateOpen) {
 					fmt.Println("Not able to send data in Datachannel either died or not ready, for ", user.Email)
 					return
 				}

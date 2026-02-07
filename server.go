@@ -128,30 +128,34 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 
 	UserConnectionsMutex.Lock()
 	logger.Debug("Response from target server", "130", parsed_user_data.User.Email)
-	if _, ok := UserConnections[parsed_user_data.User.ID]; ok {
-		logger.Debug(fmt.Sprintf("Existing connection found for %s, connection state: %t", UserConnections[parsed_user_data.User.ID].Email, UserConnections[parsed_user_data.User.ID].Died))
+	if existingConn, ok := UserConnections[parsed_user_data.User.ID]; ok {
+		logger.Debug(fmt.Sprintf("Existing connection found for %s, connection state: %t", existingConn.Email, existingConn.Died))
 
-		if _, ok := CompanySFUs[parsed_user_data.CompanyID]; ok {
-			CompanySFUs[parsed_user_data.CompanyID].CompanySFUUsersRMLock.RLock()
-			if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; ok {
-				UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RLock()
-				if !UserConnections[parsed_user_data.User.ID].Died {
-					UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RUnlock()
+		CompanySFUsMutex.RLock()
+		companySFU, sfuExists := CompanySFUs[parsed_user_data.CompanyID]
+		CompanySFUsMutex.RUnlock()
+
+		if sfuExists {
+			companySFU.CompanySFUUsersRMLock.RLock()
+			_, userInSFU := companySFU.Users[models.UserId(parsed_user_data.User.ID)]
+			companySFU.CompanySFUUsersRMLock.RUnlock()
+
+			if userInSFU {
+				existingConn.FullConnectionDetailsRWLock.RLock()
+				isDead := existingConn.Died
+				existingConn.FullConnectionDetailsRWLock.RUnlock()
+
+				if !isDead {
+					UserConnectionsMutex.Unlock()
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusBadRequest)
-					
 					json.NewEncoder(w).Encode(map[string]string{
 						"error": "User connection already exists. Please exit that connection to connect here.",
 					})
-					
-					UserConnectionsMutex.Unlock()
 					return
 				}
-				UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.RUnlock()
 			}
-			CompanySFUs[parsed_user_data.CompanyID].CompanySFUUsersRMLock.RUnlock()
 		}
-
 	}
 	UserConnectionsMutex.Unlock()
 	// Add company SFU process to CompanuSFUs
@@ -159,26 +163,34 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 	logger.Debug("Response from target server", "149", parsed_user_data.User.Email)
 	CompanySFUsMutex.Lock()
 
-	if _, ok := CompanySFUs[parsed_user_data.CompanyID]; !ok {
-		CompanySFUs[parsed_user_data.CompanyID] = models.NewCompanySFU()
+	companySFU, sfuExists := CompanySFUs[parsed_user_data.CompanyID]
+	if !sfuExists {
+		companySFU = models.NewCompanySFU()
+		CompanySFUs[parsed_user_data.CompanyID] = companySFU
 		// Start SFU processed
 		// Start Boradcasting online status
-		go CompanySFUs[parsed_user_data.CompanyID].StartOnlineStatusBroadcaster()
+		go companySFU.StartOnlineStatusBroadcaster()
 		// Start sending HeartBeat
-		go CompanySFUs[parsed_user_data.CompanyID].StartHeartBeat()
-		go CompanySFUs[parsed_user_data.CompanyID].Start_instant_renegotiator_caller()
+		go companySFU.StartHeartBeat()
+		go companySFU.Start_instant_renegotiator_caller()
 	}
-	CompanySFUs[parsed_user_data.CompanyID].CompanyID = parsed_user_data.CompanyID
+	companySFU.CompanyID = parsed_user_data.CompanyID
 
 	CompanySFUsMutex.Unlock()
 
 	logger.Debug("Response from target server", "165", parsed_user_data.User.Email)
+
+	// Get companySFU safely
+	CompanySFUsMutex.RLock()
+	companySFU = CompanySFUs[parsed_user_data.CompanyID]
+	CompanySFUsMutex.RUnlock()
+
 	// accepting the offered SDP
 	peer_connection, err := mediaorchestration.CreateAnswer(
 		sdp,
 		&parsed_user_data,
 		models.Sync_track,
-		CompanySFUs[parsed_user_data.CompanyID])
+		companySFU)
 
 	if err != nil {
 		http.Error(w, "Failed to create answer", http.StatusInternalServerError)
@@ -188,50 +200,64 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Answer created successfully", parsed_user_data.User.Email)
 
-	var conn *models.FullConnectionDetails
+	// Set up connection details with proper locking
+	peer_connection.FullConnectionDetailsRWLock.Lock()
+	peer_connection.OfferSDP = payload.SDP
+	peer_connection.AnswerSDP = peer_connection.Webrtc.LocalDescription().SDP
+	peer_connection.Died = false
+	peer_connection.Offline = false
+	peer_connection.OfflineSince = 0
+	peer_connection.Username = parsed_user_data.User.FullName
+	peer_connection.Email = parsed_user_data.User.Email
+	peer_connection.CompanyId = parsed_user_data.CompanyID
+	peer_connection.Rooms = []*models.Room{}
+	peer_connection.FullConnectionDetailsRWLock.Unlock()
+
+	// Store in UserConnections map
 	UserConnectionsMutex.Lock()
 	UserConnections[parsed_user_data.User.ID] = peer_connection
-	UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.Lock()
-
-	UserConnections[parsed_user_data.User.ID].OfferSDP = payload.SDP
-	UserConnections[parsed_user_data.User.ID].AnswerSDP = UserConnections[parsed_user_data.User.ID].Webrtc.LocalDescription().SDP
-	UserConnections[parsed_user_data.User.ID].Died = false
-	UserConnections[parsed_user_data.User.ID].Offline = false
-	UserConnections[parsed_user_data.User.ID].OfflineSince = 0
-
-	UserConnections[parsed_user_data.User.ID].Username = parsed_user_data.User.FullName
-	UserConnections[parsed_user_data.User.ID].Email = parsed_user_data.User.Email
-	UserConnections[parsed_user_data.User.ID].CompanyId = parsed_user_data.CompanyID
-	UserConnections[parsed_user_data.User.ID].Rooms = []*models.Room{}
-	UserConnections[parsed_user_data.User.ID].FullConnectionDetailsRWLock.Unlock()
-
-	conn = UserConnections[parsed_user_data.User.ID]
 	UserConnectionsMutex.Unlock()
 
+	conn := peer_connection
+
+	// Add rooms to companySFU
+	companySFU.CompanySFUsMutex.Lock()
 	for _, room := range parsed_user_data.Rooms {
-		CompanySFUsMutex.Lock()
-		CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Lock()
-		CompanySFUs[parsed_user_data.CompanyID].Rooms[models.RoomId(room.ID)] = &room
-		CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Unlock()
-		CompanySFUsMutex.Unlock()
+		roomCopy := room // Create a copy to avoid pointer issues
+		companySFU.Rooms[models.RoomId(room.ID)] = &roomCopy
 	}
+	companySFU.CompanySFUsMutex.Unlock()
 	// start all webrtc processes
-	go mediaorchestration.SingleOrchestrator(conn, CompanySFUs[parsed_user_data.CompanyID], &UserConnections, &UserConnectionsMutex)
+	go mediaorchestration.SingleOrchestrator(conn, companySFU, &UserConnections, &UserConnectionsMutex)
 	log.Println("Started single orchestrator for user : ", parsed_user_data.User.Email)
 
 	//setup renegotiation
-	UserConnectionsMutex.Lock()
+	conn.FullConnectionDetailsRWLock.Lock()
 	conn.OnDataChannelBroadcaster = func(fcd *models.FullConnectionDetails) {
 		logger.Debug("Data Channel added! adding negotiator.")
 
-		// starting data sending routine
-		go func(conn *models.FullConnectionDetails) {
-			conn.FullConnectionDetailsRWLock.RLock()
-			defer conn.FullConnectionDetailsRWLock.RUnlock()
-			for msg := range conn.OutgoingDataChannel {
-				if conn.DataChannel != nil && conn.DataChannel.ReadyState() == webrtc.DataChannelStateOpen {
-					err := conn.DataChannel.Send(msg)
-					if err != nil {
+		// starting data sending routine with proper cancellation
+		go func(c *models.FullConnectionDetails) {
+			for {
+				c.FullConnectionDetailsRWLock.RLock()
+				outChan := c.OutgoingDataChannel
+				c.FullConnectionDetailsRWLock.RUnlock()
+
+				if outChan == nil {
+					return
+				}
+
+				msg, ok := <-outChan
+				if !ok {
+					return // channel closed
+				}
+
+				c.FullConnectionDetailsRWLock.RLock()
+				dc := c.DataChannel
+				c.FullConnectionDetailsRWLock.RUnlock()
+
+				if dc != nil && dc.ReadyState() == webrtc.DataChannelStateOpen {
+					if err := dc.Send(msg); err != nil {
 						fmt.Println("Failed to send via datachannel:", err)
 					}
 				}
@@ -241,17 +267,21 @@ func auth_handler(w http.ResponseWriter, r *http.Request) {
 		fcd.RenegotiateMutex = sync.Mutex{}
 		mediaorchestration.Initialize_renegotiation(fcd)
 	}
-	UserConnectionsMutex.Unlock()
+	conn.FullConnectionDetailsRWLock.Unlock()
 	log.Println("Added data channel onDatachannel : ", parsed_user_data.User.Email)
 
-	CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Lock()
-	if _, ok := CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)]; !ok {
-		CompanySFUs[parsed_user_data.CompanyID].Users[models.UserId(parsed_user_data.User.ID)] = conn
+	companySFU.CompanySFUsMutex.Lock()
+	if _, ok := companySFU.Users[models.UserId(parsed_user_data.User.ID)]; !ok {
+		companySFU.Users[models.UserId(parsed_user_data.User.ID)] = conn
 	}
-	CompanySFUs[parsed_user_data.CompanyID].CompanySFUsMutex.Unlock()
+	companySFU.CompanySFUsMutex.Unlock()
+
+	conn.FullConnectionDetailsRWLock.RLock()
+	answerSDP := conn.AnswerSDP
+	conn.FullConnectionDetailsRWLock.RUnlock()
 
 	res_payload := map[string]interface{}{
-		"SDP":    EncodeToBase64(conn.AnswerSDP),
+		"SDP":    EncodeToBase64(answerSDP),
 		"status": "success",
 	}
 	log.Println("Sending Answer SDP to user ", parsed_user_data.User.Email)

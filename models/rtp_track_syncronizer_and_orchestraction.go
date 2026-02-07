@@ -120,16 +120,6 @@ func Forward(ctx context.Context, buf <-chan *rtp.Packet, sender *webrtc.TrackLo
 
 func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU) {
 
-	company_sfu.CompanySFUsMutex.RLock()
-	all_users := company_sfu.Users
-	company_sfu.CompanySFUsMutex.RUnlock()
-
-	// refresh_users := func() {
-	// 	company_sfu.CompanySFUsMutex.RLock()
-	// 	all_users = company_sfu.Users
-	// 	company_sfu.CompanySFUsMutex.RUnlock()
-	// }
-
 	peer_connection.Webrtc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		// fmt.Printf("Track has started, of type %d: %s \n", track.PayloadType(), track.Codec().MimeType)
 
@@ -142,6 +132,15 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 			peer_connection.AudioReceiver = track
 
 			for {
+				// Check if connection is dead
+				peer_connection.DiedLock.Lock()
+				isDead := peer_connection.Died
+				peer_connection.DiedLock.Unlock()
+				if isDead {
+					fmt.Println("Audio RTP loop exiting - connection died for", peer_connection.Email)
+					return
+				}
+
 				rtp, _, readErr := track.ReadRTP()
 
 				if readErr != nil {
@@ -149,29 +148,30 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					return
 				}
 
+				// Create snapshot of users
 				company_sfu.CompanySFUsMutex.RLock()
-				all_users = company_sfu.Users
+				all_users := make(map[UserId]*FullConnectionDetails)
+				for k, v := range company_sfu.Users {
+					all_users[k] = v
+				}
 				company_sfu.CompanySFUsMutex.RUnlock()
 
-				for _, user := range all_users {
+				for userId, user := range all_users {
 
-					if user.UserId == peer_connection.UserId {
-						continue
-					}
-
-					if _, ok := all_users[user.UserId]; !ok {
+					if userId == peer_connection.UserId {
 						continue
 					}
 
-					all_users[user.UserId].FullConnectionDetailsRWLock.RLock()
-					if all_users[user.UserId] == nil || all_users[user.UserId].Webrtc == nil || all_users[user.UserId].Died || all_users[user.UserId].DataChannel == nil {
-						all_users[user.UserId].FullConnectionDetailsRWLock.RUnlock()
+					user.FullConnectionDetailsRWLock.RLock()
+					if user.Webrtc == nil || user.Died || user.DataChannel == nil {
+						user.FullConnectionDetailsRWLock.RUnlock()
 						continue
 					}
-					if all_users[user.UserId].Webrtc.ConnectionState() != webrtc.PeerConnectionStateConnected || all_users[user.UserId].DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
+					if user.Webrtc.ConnectionState() != webrtc.PeerConnectionStateConnected || user.DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
+						user.FullConnectionDetailsRWLock.RUnlock()
 						continue
 					}
-					all_users[user.UserId].FullConnectionDetailsRWLock.RUnlock()
+					user.FullConnectionDetailsRWLock.RUnlock()
 
 					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
 					if user.Webrtc.SignalingState() != webrtc.SignalingStateStable {
@@ -191,16 +191,36 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					user.MemberLock.Unlock()
 					if memberTrack == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId)
+						// Turn off audio pipe for this user
+						peer_connection.MemberLock.Lock()
+						if peer_connection.MemberTracks != nil && peer_connection.MemberTracks[string(user.UserId)] != nil {
+							peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Lock()
+							peer_connection.MemberTracks[string(user.UserId)].PipeAudio = false
+							peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Unlock()
+						}
+						peer_connection.MemberLock.Unlock()
 						company_sfu.RtpSyncNeededMutex.Lock()
-						company_sfu.RtpSyncNeeded = true
+						if !company_sfu.RtpSyncNeeded {
+							company_sfu.RtpSyncNeeded = true
+						}
 						company_sfu.RtpSyncNeededMutex.Unlock()
 						continue
 					}
 
 					if memberTrack.AudioTrack == nil {
 						fmt.Println("Audio track is nill for ", string(peer_connection.UserId))
+						// Turn off audio pipe for this user
+						peer_connection.MemberLock.Lock()
+						if peer_connection.MemberTracks != nil && peer_connection.MemberTracks[string(user.UserId)] != nil {
+							peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Lock()
+							peer_connection.MemberTracks[string(user.UserId)].PipeAudio = false
+							peer_connection.MemberTracks[string(user.UserId)].AudioPipeLock.Unlock()
+						}
+						peer_connection.MemberLock.Unlock()
 						company_sfu.RtpSyncNeededMutex.Lock()
-						company_sfu.RtpSyncNeeded = true
+						if !company_sfu.RtpSyncNeeded {
+							company_sfu.RtpSyncNeeded = true
+						}
 						company_sfu.RtpSyncNeededMutex.Unlock()
 						continue
 					}
@@ -218,32 +238,47 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 
 					// Route check
 					if should_pipe {
-						select {
-						case memberTrack.AudioBuffer <- rtp.Clone():
-							continue
-							// successfully passed to buff
-						default:
-							// buff full leaving for now
-						}
-					}
-
-					// now need to chech if user is broadcasing to room and if this particular user is in that room send the media
-					peer_connection.AudioPipeLockRoom.RLock()
-					rooms := peer_connection.AudioRoomsMap
-					peer_connection.AudioPipeLockRoom.RUnlock()
-
-					for room_id, state := range rooms {
-						if !state {
-							continue
-						}
-						if Contains(*company_sfu.Rooms[RoomId(room_id)].AccessList, string(peer_connection.UserId)) {
+						memberTrack.AudioBufferClose.Lock()
+						if memberTrack.AudioBuffer != nil {
 							select {
 							case memberTrack.AudioBuffer <- rtp.Clone():
-								continue
 								// successfully passed to buff
 							default:
 								// buff full leaving for now
 							}
+						}
+						memberTrack.AudioBufferClose.Unlock()
+					}
+
+					// now need to chech if user is broadcasing to room and if this particular user is in that room send the media
+					peer_connection.AudioPipeLockRoom.RLock()
+					roomsCopy := make(map[string]bool)
+					for k, v := range peer_connection.AudioRoomsMap {
+						roomsCopy[k] = v
+					}
+					peer_connection.AudioPipeLockRoom.RUnlock()
+
+					for room_id, state := range roomsCopy {
+						if !state {
+							continue
+						}
+						company_sfu.CompanySFUsMutex.RLock()
+						room, roomExists := company_sfu.Rooms[RoomId(room_id)]
+						company_sfu.CompanySFUsMutex.RUnlock()
+						if !roomExists || room == nil || room.AccessList == nil {
+							continue
+						}
+						if Contains(*room.AccessList, string(peer_connection.UserId)) {
+							memberTrack.AudioBufferClose.Lock()
+							if memberTrack.AudioBuffer != nil {
+								select {
+								case memberTrack.AudioBuffer <- rtp.Clone():
+									// successfully passed to buff
+								default:
+									// buff full leaving for now
+								}
+							}
+							memberTrack.AudioBufferClose.Unlock()
 						}
 					}
 
@@ -259,39 +294,46 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 			SendPLI(track, peer_connection.Webrtc, 5*time.Second)
 
 			for {
-				rtp, _, readErr := track.ReadRTP()
-
-				company_sfu.CompanySFUsMutex.RLock()
-				all_users := map[UserId]*FullConnectionDetails{}
-				for key, value := range company_sfu.Users {
-					all_users[key] = value
+				// Check if connection is dead
+				peer_connection.DiedLock.Lock()
+				isDead := peer_connection.Died
+				peer_connection.DiedLock.Unlock()
+				if isDead {
+					fmt.Println("Video RTP loop exiting - connection died for", peer_connection.Email)
+					return
 				}
-				company_sfu.CompanySFUsMutex.RUnlock()
+
+				rtp, _, readErr := track.ReadRTP()
 
 				if readErr != nil {
 					fmt.Println("Unable to read Video RTP")
 					return
 				}
 
-				for _, user := range all_users {
+				// Create snapshot of users
+				company_sfu.CompanySFUsMutex.RLock()
+				all_users := make(map[UserId]*FullConnectionDetails)
+				for key, value := range company_sfu.Users {
+					all_users[key] = value
+				}
+				company_sfu.CompanySFUsMutex.RUnlock()
 
-					if user.UserId == peer_connection.UserId {
+				for userId, user := range all_users {
+
+					if userId == peer_connection.UserId {
 						continue
 					}
 
-					if _, ok := all_users[user.UserId]; !ok {
+					user.FullConnectionDetailsRWLock.RLock()
+					if user.Webrtc == nil || user.Died || user.DataChannel == nil {
+						user.FullConnectionDetailsRWLock.RUnlock()
 						continue
 					}
-
-					all_users[user.UserId].FullConnectionDetailsRWLock.RLock()
-					if all_users[user.UserId] == nil || all_users[user.UserId].Webrtc == nil || all_users[user.UserId].Died || all_users[user.UserId].DataChannel == nil {
-						all_users[user.UserId].FullConnectionDetailsRWLock.RUnlock()
+					if user.Webrtc.ConnectionState() != webrtc.PeerConnectionStateConnected || user.DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
+						user.FullConnectionDetailsRWLock.RUnlock()
 						continue
 					}
-					if all_users[user.UserId].Webrtc.ConnectionState() != webrtc.PeerConnectionStateConnected || all_users[user.UserId].DataChannel.ReadyState() != webrtc.DataChannelStateOpen {
-						continue
-					}
-					all_users[user.UserId].FullConnectionDetailsRWLock.RUnlock()
+					user.FullConnectionDetailsRWLock.RUnlock()
 					// Peerconnection is sending the RTP tracks for the user to receive the connection to him must be stable.
 					if user.Webrtc.SignalingState() != webrtc.SignalingStateStable {
 						fmt.Println("Signaling state is not stable for user", user.Email, user.UserId, "state:", user.Webrtc.SignalingState())
@@ -310,15 +352,35 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					user.MemberLock.Unlock()
 					if memberTrack == nil {
 						fmt.Println("Member Track (AudioTrack + VideoTrack) is nill for ", peer_connection.UserId, "for user", user.Email, user.UserId)
+						// Turn off video pipe for this user
+						peer_connection.MemberLock.Lock()
+						if peer_connection.MemberTracks != nil && peer_connection.MemberTracks[string(user.UserId)] != nil {
+							peer_connection.MemberTracks[string(user.UserId)].VideoPipeLock.Lock()
+							peer_connection.MemberTracks[string(user.UserId)].PipeVideo = false
+							peer_connection.MemberTracks[string(user.UserId)].VideoPipeLock.Unlock()
+						}
+						peer_connection.MemberLock.Unlock()
 						company_sfu.RtpSyncNeededMutex.Lock()
-						company_sfu.RtpSyncNeeded = true
+						if !company_sfu.RtpSyncNeeded {
+							company_sfu.RtpSyncNeeded = true
+						}
 						company_sfu.RtpSyncNeededMutex.Unlock()
 						continue
 					}
 					if memberTrack.VideoTrack == nil {
 						fmt.Println("Video track is nill for ", string(peer_connection.UserId), "for user", user.Email, user.UserId)
+						// Turn off video pipe for this user
+						peer_connection.MemberLock.Lock()
+						if peer_connection.MemberTracks != nil && peer_connection.MemberTracks[string(user.UserId)] != nil {
+							peer_connection.MemberTracks[string(user.UserId)].VideoPipeLock.Lock()
+							peer_connection.MemberTracks[string(user.UserId)].PipeVideo = false
+							peer_connection.MemberTracks[string(user.UserId)].VideoPipeLock.Unlock()
+						}
+						peer_connection.MemberLock.Unlock()
 						company_sfu.RtpSyncNeededMutex.Lock()
-						company_sfu.RtpSyncNeeded = true
+						if !company_sfu.RtpSyncNeeded {
+							company_sfu.RtpSyncNeeded = true
+						}
 						company_sfu.RtpSyncNeededMutex.Unlock()
 						continue
 					}
@@ -336,35 +398,47 @@ func Sync_track(peer_connection *FullConnectionDetails, company_sfu *CompanySFU)
 					peerTrack.VideoPipeLock.Unlock()
 
 					if should_pipe {
-						select {
-						case memberTrack.VideoBuffer <- rtp.Clone():
-							continue
-							// successfully passed to buff
-						default:
-							// buff full leaving for now
-						}
-					}
-
-					// now need to chech if user is broadcasing to room and if this particular user is in that room send the media
-					peer_connection.VideoPipeLockRoom.RLock()
-					rooms := make(map[RoomId]bool)
-					for room_id, state := range peer_connection.VideoRoomsMap {
-						rooms[RoomId(room_id)] = state
-					}
-					peer_connection.VideoPipeLockRoom.RUnlock()
-
-					for room_id, state := range rooms {
-						if !state {
-							continue
-						}
-						if Contains(*company_sfu.Rooms[RoomId(room_id)].AccessList, string(peer_connection.UserId)) {
+						memberTrack.VideoBufferClose.Lock()
+						if memberTrack.VideoBuffer != nil {
 							select {
 							case memberTrack.VideoBuffer <- rtp.Clone():
-								continue
 								// successfully passed to buff
 							default:
 								// buff full leaving for now
 							}
+						}
+						memberTrack.VideoBufferClose.Unlock()
+					}
+
+					// now need to chech if user is broadcasing to room and if this particular user is in that room send the media
+					peer_connection.VideoPipeLockRoom.RLock()
+					roomsCopy := make(map[RoomId]bool)
+					for room_id, state := range peer_connection.VideoRoomsMap {
+						roomsCopy[RoomId(room_id)] = state
+					}
+					peer_connection.VideoPipeLockRoom.RUnlock()
+
+					for room_id, state := range roomsCopy {
+						if !state {
+							continue
+						}
+						company_sfu.CompanySFUsMutex.RLock()
+						room, roomExists := company_sfu.Rooms[room_id]
+						company_sfu.CompanySFUsMutex.RUnlock()
+						if !roomExists || room == nil || room.AccessList == nil {
+							continue
+						}
+						if Contains(*room.AccessList, string(peer_connection.UserId)) {
+							memberTrack.VideoBufferClose.Lock()
+							if memberTrack.VideoBuffer != nil {
+								select {
+								case memberTrack.VideoBuffer <- rtp.Clone():
+									// successfully passed to buff
+								default:
+									// buff full leaving for now
+								}
+							}
+							memberTrack.VideoBufferClose.Unlock()
 						}
 					}
 
@@ -452,6 +526,10 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 		return
 	}
 
+	company_sfu.RtpSyncNeededMutex.Lock()
+	company_sfu.Renegotiating = true
+	company_sfu.RtpSyncNeededMutex.Unlock()
+
 	defer func() {
 		company_sfu.RtpSyncNeededMutex.Lock()
 		company_sfu.RtpSyncNeeded = false
@@ -459,29 +537,23 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 		company_sfu.RtpSyncNeededMutex.Unlock()
 	}()
 
-	company_sfu.RtpSyncNeededMutex.Lock()
-	company_sfu.Renegotiating = true
-	company_sfu.RtpSyncNeededMutex.Unlock()
-
 	fmt.Println("Syncing user tracks and renegotiating...")
 
+	// Create a snapshot of users
 	company_sfu.CompanySFUsMutex.RLock()
-	all_users := company_sfu.Users
+	all_users := make(map[UserId]*FullConnectionDetails)
+	for k, v := range company_sfu.Users {
+		all_users[k] = v
+	}
 	company_sfu.CompanySFUsMutex.RUnlock()
-
-	// refresh_users := func() {
-	// 	company_sfu.CompanySFUsMutex.RLock()
-	// 	all_users = company_sfu.Users
-	// 	company_sfu.CompanySFUsMutex.RUnlock()
-	// }
 
 	for _, user := range all_users {
 
 		user.FullConnectionDetailsRWLock.RLock()
-		is_user_alive := user.Died
+		is_user_dead := user.Died
 		user.FullConnectionDetailsRWLock.RUnlock()
 
-		if is_user_alive {
+		if is_user_dead {
 			continue
 		}
 
@@ -498,12 +570,18 @@ func sysc_user_tracks_and_renegotiate(company_sfu *CompanySFU) {
 				continue
 			}
 
-			if all_users[users_connction_check.UserId].Webrtc.ConnectionState() != webrtc.PeerConnectionStateConnected {
+			users_connction_check.FullConnectionDetailsRWLock.RLock()
+			webrtcConn := users_connction_check.Webrtc
+			users_connction_check.FullConnectionDetailsRWLock.RUnlock()
+
+			if webrtcConn == nil || webrtcConn.ConnectionState() != webrtc.PeerConnectionStateConnected {
 				continue
 			}
 
-			audio_track := all_users[users_connction_check.UserId].AudioReceiver
-			video_track := all_users[users_connction_check.UserId].VideoReceiver
+			users_connction_check.FullConnectionDetailsRWLock.RLock()
+			audio_track := users_connction_check.AudioReceiver
+			video_track := users_connction_check.VideoReceiver
+			users_connction_check.FullConnectionDetailsRWLock.RUnlock()
 
 			if audio_track != nil {
 

@@ -369,9 +369,9 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 	live_state := single_connection.Webrtc.ConnectionState()
 
 	switch live_state {
-	case webrtc.PeerConnectionStateDisconnected,
-		webrtc.PeerConnectionStateFailed,
+	case webrtc.PeerConnectionStateFailed,
 		webrtc.PeerConnectionStateClosed:
+		// Only close on Failed or Closed - NOT on Disconnected
 		closeDone()
 
 	}
@@ -380,9 +380,10 @@ func SingleOrchestrator(single_connection *models.FullConnectionDetails, company
 		fmt.Println(single_connection.Email, single_connection.UserId, "Connection state has changed to:", state.String())
 
 		switch state {
-		case webrtc.PeerConnectionStateDisconnected,
-			webrtc.PeerConnectionStateFailed,
+		case webrtc.PeerConnectionStateFailed,
 			webrtc.PeerConnectionStateClosed:
+			// Only close on Failed or Closed - NOT on Disconnected
+			// Disconnected is temporary and can happen during renegotiation
 			closeDone()
 		}
 	})
@@ -406,18 +407,26 @@ func close_connection(single_connection *models.FullConnectionDetails, company_s
 	delete(company_sfu.Users, single_connection.UserId)
 	company_sfu.CompanySFUsMutex.Unlock()
 
+	// Close channel safely - set to nil first, then close
 	single_connection.FullConnectionDetailsRWLock.Lock()
-	if single_connection.OutgoingDataChannel != nil {
-		close(single_connection.OutgoingDataChannel)
-		single_connection.OutgoingDataChannel = nil
-	}
+	outChan := single_connection.OutgoingDataChannel
+	single_connection.OutgoingDataChannel = nil
 	single_connection.FullConnectionDetailsRWLock.Unlock()
 
-	// now I have to remove this member track from all the users.
-	company_sfu.CompanySFUsMutex.RLock()
-	defer company_sfu.CompanySFUsMutex.RUnlock()
+	if outChan != nil {
+		close(outChan)
+	}
 
-	for _, user := range company_sfu.Users {
+	// Create a copy of users to iterate over (avoid holding lock during iteration)
+	company_sfu.CompanySFUsMutex.RLock()
+	usersCopy := make(map[models.UserId]*models.FullConnectionDetails)
+	for k, v := range company_sfu.Users {
+		usersCopy[k] = v
+	}
+	company_sfu.CompanySFUsMutex.RUnlock()
+
+	// now I have to remove this member track from all the users.
+	for _, user := range usersCopy {
 
 		func() {
 			user.MemberLock.Lock()
@@ -459,7 +468,7 @@ func close_connection(single_connection *models.FullConnectionDetails, company_s
 							fmt.Println("Error removing video track:", err)
 						}
 					}
-					
+
 					cancel_all(user.MemberTracks[member_id])
 
 					delete(user.MemberTracks, member_id)
@@ -467,7 +476,11 @@ func close_connection(single_connection *models.FullConnectionDetails, company_s
 					fmt.Println("Removed member track for user:", user.UserId, "member_id:", member_id)
 					fmt.Println(">>>>>>>>> Intiating removed re-negotiation <<<<<<<<")
 
-					if !user.Died && user.Webrtc != nil {
+					user.DiedLock.Lock()
+					userDied := user.Died
+					user.DiedLock.Unlock()
+
+					if !userDied && user.Webrtc != nil {
 						fmt.Println("User is alive in the SFU, initiating renegotiation.")
 						fmt.Println("Total tracks for user:", user.Webrtc.GetTransceivers())
 						fmt.Println("Sender tracks for user:", user.Webrtc.GetSenders())
@@ -485,7 +498,6 @@ func close_connection(single_connection *models.FullConnectionDetails, company_s
 			}
 		}()
 	}
-
 }
 
 func cancel_all(member_track *models.MemberOutputTrack) {
